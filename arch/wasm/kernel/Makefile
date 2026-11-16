@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 
 obj-y += console.o entry.o irq.o process.o sections.o setup.o syscall.o time.o
+obj-$(CONFIG_BINFMT_WASM) += binfmt_wasm.o
 
 # Linked first and last by arch/wasm/tools/wasm-ld.sh to bracket the
 # sections that a linker script would normally provide symbols for.

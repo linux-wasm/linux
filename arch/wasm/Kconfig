@@ -62,6 +62,13 @@ config HZ
 config GENERIC_CALIBRATE_DELAY
 	def_bool n
 
+config BINFMT_WASM
+	bool "Kernel support for WebAssembly user programs"
+	default y
+	help
+	  Run position-independent WebAssembly modules as user programs.
+	  The user-space ABI is described in arch/wasm/kernel/binfmt_wasm.c.
+
 config CMDLINE
 	string "Built-in kernel command line"
 	default ""

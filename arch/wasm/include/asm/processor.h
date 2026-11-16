@@ -13,6 +13,12 @@ struct thread_struct {
 	/* Kernel thread entry point, run by wasm_thread_start(). */
 	int (*fn)(void *);
 	void *fn_arg;
+	/*
+	 * Set by a successful exec of a wasm program: when fn returns, the
+	 * thread enters user mode by calling the program's _start(user_sp).
+	 */
+	int user;
+	unsigned long user_sp;
 	/* A host thread has been requested for this task. */
 	int spawned;
 	/*

@@ -17,6 +17,7 @@
 #include <linux/sched/debug.h>
 #include <linux/sched/task.h>
 #include <linux/sched/task_stack.h>
+#include <linux/sched/signal.h>
 #include <asm/host.h>
 #include <asm/switch_to.h>
 #include "wasm.h"
@@ -70,17 +71,28 @@ void wasm_thread_start(struct task_struct *task)
 
 	/*
 	 * A kernel thread function only returns after a successful
-	 * kernel_execve(), i.e. when it should enter user mode.
-	 * FIXME(wasm): there is no user mode.
+	 * kernel_execve(), i.e. when it should enter user mode: the wasm
+	 * binfmt has had the host instantiate the program on this thread.
 	 */
-	panic("wasm: return to user space is not implemented");
+	if (!task->thread.user)
+		panic("wasm: kernel thread %s returned without exec", task->comm);
+
+	local_irq_enable();
+	wasm_host_user_run(task->thread.user_sp);
+
+	/* The program returned from _start instead of calling exit(). */
+	pr_warn("%s[%d]: returned from _start\n", task->comm, task_pid_nr(task));
+	do_group_exit(SIGSEGV);
 }
 
 int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 {
 	memset(&p->thread, 0, sizeof(p->thread));
 
-	/* FIXME(wasm): fork/clone of user tasks is not implemented. */
+	/*
+	 * FIXME(wasm): fork/vfork/clone of user tasks is not implemented. It
+	 * needs a second instance of the user program on a new host thread.
+	 */
 	if (!args->fn)
 		return -ENOSYS;
 

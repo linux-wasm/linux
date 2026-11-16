@@ -21,6 +21,20 @@
  *                             Does not return.
  *   get_cmdline(ptr, len)     Copy up to len bytes of kernel command line
  *     -> i32                  (no NUL needed), return the full length.
+ *   user_exec(image, len,     Compile the wasm program at image/len and
+ *       memory_base,          instantiate it for the calling thread,
+ *       table_size, sp)       replacing any program it had. Imports to
+ *     -> i32                  provide: env.memory (the kernel's), env.
+ *                             __memory_base, env.__table_base and env.
+ *                             __indirect_function_table (table_size
+ *                             entries starting at __table_base), env.
+ *                             __stack_pointer (initially sp), and linux.
+ *                             syscall, linked to this instance's
+ *                             wasm_syscall export. Then call the program's
+ *                             __wasm_apply_data_relocs export if it has
+ *                             one. Returns 0 or a negative errno.
+ *   user_run(arg)             Call the program's _start(arg) export.
+ *                             Returns if _start returns.
  *
  * Exports, called by the host:
  *
@@ -28,6 +42,8 @@
  *   wasm_thread_entry(a, b)   See spawn_thread.
  *   wasm_raise_irq(irq)       Mark an interrupt pending and wake the CPU.
  *                             Callable from any thread/instance.
+ *   wasm_syscall(nr, a0..a5)  System call entry for the user program of
+ *                             the thread this instance belongs to.
  *
  * The kernel blocks with the wasm threads instructions
  * (memory.atomic.wait32/notify) on its own; timers need no host call.
@@ -68,6 +84,14 @@ void __noreturn wasm_host_halt(int reason);
 
 __wasm_host(get_cmdline)
 size_t wasm_host_get_cmdline(char *buf, size_t len);
+
+__wasm_host(user_exec)
+int wasm_host_user_exec(const void *image, size_t len,
+			unsigned long memory_base, unsigned long table_size,
+			unsigned long sp);
+
+__wasm_host(user_run)
+void wasm_host_user_run(unsigned long arg);
 
 #endif /* __ASSEMBLY__ */
 #endif
