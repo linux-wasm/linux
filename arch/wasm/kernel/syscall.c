@@ -18,6 +18,7 @@
 #include <linux/sched/task_stack.h>
 #include <linux/signal.h>
 #include <linux/syscalls.h>
+#include <asm/host.h>
 #include <asm/processor.h>
 #include <asm/unistd.h>
 #include "wasm.h"
@@ -126,5 +127,15 @@ long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
 		regs->syscall_ret = -ENOSYS;
 
 	wasm_exit_to_user_mode(regs);
+
+	/*
+	 * After a successful execve the calling program no longer exists as
+	 * far as the kernel is concerned, but its frames are still below us
+	 * on the host stack. Have the host throw them away; control comes
+	 * back in wasm_thread_start(), which enters the new program.
+	 */
+	if (unlikely(current->thread.exec_pending))
+		wasm_host_user_unwind();
+
 	return regs->syscall_ret;
 }

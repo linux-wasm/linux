@@ -19,6 +19,11 @@ struct thread_struct {
 	 */
 	int user;
 	unsigned long user_sp;
+	/*
+	 * Set by exec, checked when the system call that caused it returns:
+	 * the old program must not be resumed. See wasm_syscall().
+	 */
+	int exec_pending;
 	/* A host thread has been requested for this task. */
 	int spawned;
 	/*

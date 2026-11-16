@@ -22,6 +22,25 @@
 #include <asm/switch_to.h>
 #include "wasm.h"
 
+__asm__(".globaltype __stack_pointer, i32\n");
+
+static __always_inline unsigned long wasm_get_stack_pointer(void)
+{
+	unsigned long sp;
+
+	__asm__ volatile("global.get __stack_pointer\n"
+			 "local.set %0"
+			 : "=r"(sp));
+	return sp;
+}
+
+static __always_inline void wasm_set_stack_pointer(unsigned long sp)
+{
+	__asm__ volatile("local.get %0\n"
+			 "global.set __stack_pointer"
+			 : : "r"(sp));
+}
+
 /* The task we most recently switched away from. Protected by being UP. */
 static struct task_struct *wasm_last_task;
 
@@ -63,25 +82,46 @@ void wasm_thread_start(struct task_struct *task)
 {
 	int (*fn)(void *) = task->thread.fn;
 	void *fn_arg = task->thread.fn_arg;
+	int entry = WASM_USER_CLONE;
 
 	schedule_tail(wasm_last_task);
 
-	if (fn)
+	if (fn) {
 		fn(fn_arg);
-
-	/*
-	 * A kernel thread function only returns after a successful
-	 * kernel_execve(), i.e. when it should enter user mode: the wasm
-	 * binfmt has had the host instantiate the program on this thread.
-	 */
-	if (!task->thread.user)
-		panic("wasm: kernel thread %s returned without exec", task->comm);
+		/*
+		 * A kernel thread function only returns after a successful
+		 * kernel_execve(), i.e. when it should enter user mode: the
+		 * wasm binfmt has had the host instantiate the program on
+		 * this thread.
+		 */
+		if (!task->thread.user)
+			panic("wasm: kernel thread %s returned without exec",
+			      task->comm);
+		entry = WASM_USER_START;
+	}
 
 	local_irq_enable();
-	wasm_host_user_run(task->thread.user_sp);
 
-	/* The program returned from _start instead of calling exit(). */
-	pr_warn("%s[%d]: returned from _start\n", task->comm, task_pid_nr(task));
+	/*
+	 * Run the program. If it execs, wasm_syscall() has the host unwind
+	 * everything above this frame, including the kernel frames of that
+	 * system call, and user_run() returns 1: start over with the new
+	 * program. The unwinding does not restore the kernel stack pointer,
+	 * so do that here.
+	 */
+	for (;;) {
+		unsigned long sp = wasm_get_stack_pointer();
+
+		task->thread.exec_pending = 0;
+		if (!wasm_host_user_run(task->thread.user_sp, entry))
+			break;
+		wasm_set_stack_pointer(sp);
+		entry = WASM_USER_START;
+	}
+
+	/* The program returned instead of calling exit(). */
+	pr_warn("%s[%d]: returned from its entry point\n", task->comm,
+		task_pid_nr(task));
 	do_group_exit(SIGSEGV);
 }
 
@@ -89,15 +129,30 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 {
 	memset(&p->thread, 0, sizeof(p->thread));
 
-	/*
-	 * FIXME(wasm): fork/vfork/clone of user tasks is not implemented. It
-	 * needs a second instance of the user program on a new host thread.
-	 */
-	if (!args->fn)
-		return -ENOSYS;
+	if (args->fn) {
+		p->thread.fn = args->fn;
+		p->thread.fn_arg = args->fn_arg;
+		return 0;
+	}
 
-	p->thread.fn = args->fn;
-	p->thread.fn_arg = args->fn_arg;
+	/*
+	 * clone() from a user program. A new host thread cannot continue in
+	 * the middle of the parent's wasm call stack, so the child does not
+	 * "return from clone": it gets its own instance of the program and
+	 * starts at the program's __clone_entry(stack) export. That requires
+	 * a stack of its own and the parent's memory (there is no MMU to
+	 * copy an address space anyway).
+	 *
+	 * FIXME(wasm): fork() and vfork() proper (returning twice) are not
+	 * possible this way; a libc has to build them, or posix_spawn, on
+	 * clone with an entry function.
+	 */
+	if (!current->thread.user || !(args->flags & CLONE_VM) || !args->stack)
+		return -EINVAL;
+
+	p->thread.user = 1;
+	p->thread.user_sp = args->stack;
+	wasm_host_user_clone(p);
 	return 0;
 }
 

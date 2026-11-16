@@ -24,14 +24,25 @@
  *
  *    __stack_pointer starts at the same address and grows down from it.
  *    _start must not return.
+ *  - may export __clone_entry, type (i32 stack) -> (), to be able to call
+ *    clone(). The child cannot continue in the parent's call stack, so
+ *    clone() only returns in the parent; the child runs on a new instance
+ *    of the module (same memory, its own globals and table) and starts at
+ *    __clone_entry(stack), with stack being clone()'s stack argument and
+ *    the initial __stack_pointer. CLONE_VM and a stack are mandatory. What
+ *    the child finds on that stack (function, argument, TLS) is between
+ *    the parent and __clone_entry, i.e. libc's business. It must not
+ *    return either.
  *
  * The kernel reads the whole file, allocates one anonymous mapping holding
  * the stack followed by the module's data, and asks the host to compile and
  * instantiate the module on the calling task's thread (asm/host.h).
  *
- * FIXME(wasm): execve from a running program is not supported (the old
- * program's frames are still on the host stack), nor are threads, fork, or
- * signal handlers. The stack size is fixed and has no guard.
+ * execve() from a running program replaces the calling thread's instance;
+ * the old program's frames are discarded when the system call returns.
+ *
+ * FIXME(wasm): fork() and vfork() as such are impossible (see copy_thread),
+ * signal handlers are not run, the stack size is fixed and has no guard.
  *
  * The idea of a wasm binfmt comes from tombl/linux and joelseverin/linux;
  * this implementation and its ABI are specific to this port.
@@ -269,6 +280,7 @@ static int load_wasm_binary(struct linux_binprm *bprm)
 		goto out;
 
 	finalize_exec(bprm);
+	current->thread.exec_pending = 1;
 	current->thread.user = 1;
 	current->thread.user_sp = mm->start_stack;
 out:
