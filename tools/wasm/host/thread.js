@@ -71,6 +71,10 @@ export function runThread(init, post) {
       );
     },
 
+    clock_realtime_ns() {
+      return BigInt(Date.now()) * 1000000n;
+    },
+
     spawn_thread(task, sp) {
       post({ type: "spawn", task, sp });
     },

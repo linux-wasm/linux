@@ -14,6 +14,8 @@
  *                             The host announces new input by raising
  *                             interrupt 1 (wasm_raise_irq).
  *   clock_ns() -> i64         Monotonic clock in nanoseconds.
+ *   clock_realtime_ns()       Wall-clock time in nanoseconds since the Unix
+ *     -> i64                  epoch. Read once at boot to set the time.
  *   spawn_thread(task, sp)    Start a new host thread on a fresh instance
  *                             of this module sharing the same memory, and
  *                             call the export wasm_thread_entry(task, sp)
@@ -88,6 +90,9 @@ void wasm_host_console_write(const char *s, size_t len);
 
 __wasm_host(clock_ns)
 u64 wasm_host_clock_ns(void);
+
+__wasm_host(clock_realtime_ns)
+u64 wasm_host_clock_realtime_ns(void);
 
 __wasm_host(spawn_thread)
 void wasm_host_spawn_thread(struct task_struct *task, void *sp);

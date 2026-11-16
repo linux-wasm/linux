@@ -9,6 +9,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/sched/clock.h>
+#include <linux/timekeeping.h>
 #include <asm/host.h>
 #include <asm/irq.h>
 #include "wasm.h"
@@ -23,6 +24,12 @@ unsigned long long sched_clock(void)
 	if (!wasm_clock_origin)
 		wasm_clock_origin = now;
 	return now - wasm_clock_origin;
+}
+
+/* The kernel's wall clock starts from the host's. */
+void read_persistent_clock64(struct timespec64 *ts)
+{
+	*ts = ns_to_timespec64(wasm_host_clock_realtime_ns());
 }
 
 static u64 wasm_clocksource_read(struct clocksource *cs)
