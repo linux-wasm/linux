@@ -15,11 +15,12 @@ config WASM
 	def_bool y
 	select ARCH_NO_PREEMPT
 	select ARCH_NO_SWAP
-	select GENERIC_CSUM
-	select GENERIC_HWEIGHT
+	select GENERIC_ATOMIC64
 	select GENERIC_IRQ_SHOW
+	select HAVE_ARCH_COMPILER_H
 	select HAVE_PAGE_SIZE_4KB
-	select NO_IOPORT_MAP
+	select NO_DMA
+	select THREAD_INFO_IN_TASK
 	select UACCESS_MEMCPY
 
 config MMU
@@ -29,6 +30,19 @@ config 64BIT
 	def_bool n
 
 config ARCH_FLATMEM_ENABLE
+	def_bool y
+
+config GENERIC_CSUM
+	def_bool y
+
+config GENERIC_HWEIGHT
+	def_bool y
+
+# No memory-mapped or port I/O: devices are reached through host calls.
+config NO_IOMEM
+	def_bool y
+
+config NO_IOPORT_MAP
 	def_bool y
 
 # The kernel is linked by wasm-ld, which is neither ld.bfd nor an ELF lld:
