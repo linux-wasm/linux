@@ -1,0 +1,54 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# WebAssembly (wasm32) architecture.
+#
+# Design notes (see also Documentation in the out-of-tree NOTES.md):
+#  - No MMU: the kernel lives in one flat wasm linear memory.
+#  - Uniprocessor for now. SMP (one host thread per CPU) comes later.
+#  - No loadable modules: there is no wasm dynamic loader in the kernel.
+#  - Nothing here knows about browsers. Everything the kernel needs from
+#    the outside world goes through the small import/export interface in
+#    arch/wasm/include/asm/host.h.
+#
+
+config WASM
+	def_bool y
+	select ARCH_NO_PREEMPT
+	select ARCH_NO_SWAP
+	select GENERIC_CSUM
+	select GENERIC_HWEIGHT
+	select GENERIC_IRQ_SHOW
+	select HAVE_PAGE_SIZE_4KB
+	select NO_IOPORT_MAP
+	select UACCESS_MEMCPY
+
+config MMU
+	def_bool n
+
+config 64BIT
+	def_bool n
+
+config ARCH_FLATMEM_ENABLE
+	def_bool y
+
+# The kernel is linked by wasm-ld, which is neither ld.bfd nor an ELF lld:
+# no linker scripts, no ELF sections. Generic code can test this symbol.
+config LD_IS_WASMLD
+	def_bool y
+
+config NR_CPUS
+	int
+	default 1
+
+config HZ
+	int
+	default 100
+
+config GENERIC_CALIBRATE_DELAY
+	def_bool n
+
+config CMDLINE
+	string "Built-in kernel command line"
+	default ""
+	help
+	  Command line used when the host does not provide one.
