@@ -35,10 +35,14 @@ KBUILD_AFLAGS	+= -D__DISABLE_EXPORTS
 #  --max-memory: upper bound the host may pick for that memory (1 GiB).
 #  --no-merge-data-segments, --no-gc-sections: required by the
 #      sections_head.o/sections_tail.o scheme, see kernel/sections.h.
+#  --global-base: keep kernel data out of the first page. Address 0 is
+#      ordinary memory on wasm, but generic code (e.g. vsprintf) treats
+#      pointers below PAGE_SIZE as invalid.
 #  -z stack-size: the linker-provided stack is never used; every task
 #      (including init_task) has its own stack.
 WASM_LDFLAGS_FINAL := --no-entry --no-gc-sections --no-merge-data-segments \
 		      --import-memory --shared-memory --max-memory=1073741824 \
+		      --global-base=4096 \
 		      -z stack-size=4096 --error-limit=0 -Map=vmlinux.map \
 		      --export=_start --export=wasm_thread_entry \
 		      --export=wasm_raise_irq
@@ -66,10 +70,11 @@ all: vmlinux.wasm
 quiet_cmd_wasm_copy = COPY    $@
       cmd_wasm_copy = cp $< $@
 
+# vmlinux is a phony target in the top Makefile, so if_changed would never
+# see it as a newer prerequisite; just copy every time.
 vmlinux.wasm: vmlinux FORCE
-	$(call if_changed,wasm_copy)
+	$(call cmd,wasm_copy)
 
-targets += vmlinux.wasm
 CLEAN_FILES += vmlinux.wasm vmlinux.map
 
 define archhelp
