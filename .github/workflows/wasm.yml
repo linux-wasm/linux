@@ -1,0 +1,39 @@
+# Build the wasm kernel with the pinned toolchain container and boot it
+# headless under node. See tools/wasm/NOTES.md.
+name: wasm
+
+on:
+  push:
+    branches: [wasm-port]
+  pull_request:
+    branches: [wasm-port]
+
+jobs:
+  build-and-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build toolchain image
+        run: tools/wasm/scripts/build-env.sh
+
+      - name: Configure
+        run: tools/wasm/scripts/kmake.sh tinyconfig
+
+      - name: Build
+        run: tools/wasm/scripts/kmake.sh -j"$(nproc)"
+
+      - name: Boot test
+        run: tools/wasm/scripts/test-boot.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vmlinux-wasm
+          path: |
+            build/wasm/vmlinux.wasm
+            build/wasm/vmlinux.map
+            build/wasm/.config
