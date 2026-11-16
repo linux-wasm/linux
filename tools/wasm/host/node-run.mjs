@@ -4,6 +4,11 @@
 //
 //   node tools/wasm/host/node-run.mjs [--kernel build/wasm/vmlinux.wasm]
 //        [--mem 128] [--cmdline "..."] [--timeout seconds]
+//        [--input "text" [--input-after "marker"]]
+//
+// --input sends console input (\n is a newline) once the output contains
+// the --input-after marker, or right away without one. stdin is not
+// forwarded.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -21,6 +26,8 @@ const { values: args } = parseArgs({
     mem: { type: "string", default: "128" },
     cmdline: { type: "string", default: "" },
     timeout: { type: "string", default: "0" },
+    input: { type: "string" },
+    "input-after": { type: "string", default: "" },
   },
 });
 
@@ -31,6 +38,9 @@ const finish = (code) => {
   // Kernel threads are blocked in atomic waits; nothing else will end them.
   setTimeout(() => process.exit(code), 50);
 };
+
+let pendingInput = args.input?.replaceAll("\\n", "\n") ?? null;
+let seen = "";
 
 const machine = new Machine({
   module,
@@ -48,7 +58,15 @@ const machine = new Machine({
     worker.on("error", (err) => handle.onerror?.(err));
     return handle;
   },
-  onConsole: (text) => process.stdout.write(text),
+  onConsole(text) {
+    process.stdout.write(text);
+    if (pendingInput === null) return;
+    seen += text;
+    if (seen.includes(args["input-after"])) {
+      machine.input(pendingInput);
+      pendingInput = null;
+    }
+  },
   onEvent(event) {
     switch (event.type) {
       case "halt":

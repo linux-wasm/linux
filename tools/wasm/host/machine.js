@@ -6,7 +6,10 @@
 // output, creating further threads) is therefore done here, on a thread
 // that does not block: in a browser this must be the main thread.
 
+import { InputQueue } from "./input.js";
+
 const WASM_PAGE = 65536;
+const IRQ_CONSOLE = 1; // WASM_IRQ_CONSOLE in the kernel's asm/irq.h
 export const HALT_REASONS = ["poweroff", "restart", "panic"];
 
 export class Machine {
@@ -17,6 +20,9 @@ export class Machine {
   #nextId = 0;
   #nextSeq = 0;
   #pendingConsole = new Map();
+  #input = new InputQueue();
+  #userPrograms = new Map(); // task -> program for a thread yet to be spawned
+  #irqInstance = null;
   halted = false;
 
   // opts: { module, memoryMiB, cmdline, createWorker(),
@@ -42,6 +48,32 @@ export class Machine {
     this.#spawn({ kind: "boot" });
   }
 
+  // Console input (keyboard): a string or bytes. Returns the number of
+  // bytes accepted; the rest is dropped if the kernel is not reading.
+  input(data) {
+    const bytes =
+      typeof data === "string" ? new TextEncoder().encode(data) : data;
+    const written = this.#input.write(bytes);
+    this.raiseIrq(IRQ_CONSOLE);
+    return written;
+  }
+
+  // Raise a kernel interrupt. wasm_raise_irq only touches shared memory, so
+  // it can be called on an instance of the kernel that is otherwise unused;
+  // none of that instance's imports are ever called.
+  async raiseIrq(irq) {
+    if (this.halted) return;
+    this.#irqInstance ??= WebAssembly.instantiate(this.#opts.module, {
+      env: { memory: this.#memory },
+      host: Object.fromEntries(
+        WebAssembly.Module.imports(this.#opts.module)
+          .filter((i) => i.module === "host")
+          .map((i) => [i.name, () => { throw new Error(`host.${i.name} called on the irq instance`); }]),
+      ),
+    });
+    (await this.#irqInstance).exports.wasm_raise_irq(irq);
+  }
+
   #spawn(entry) {
     const id = this.#nextId++;
     const worker = this.#opts.createWorker();
@@ -53,9 +85,12 @@ export class Machine {
       module: this.#opts.module,
       memory: this.#memory,
       seq: this.#seq,
+      input: this.#input.buffer,
       cmdline: this.#opts.cmdline,
+      userProgram: this.#userPrograms.get(entry.task),
       entry,
     });
+    this.#userPrograms.delete(entry.task);
     this.#event({ type: "thread-start", id, entry });
   }
 
@@ -78,6 +113,9 @@ export class Machine {
         for (const worker of this.#workers.values()) worker.terminate();
         this.#workers.clear();
         this.#event({ type: "halt", id, reason: HALT_REASONS[msg.reason] ?? msg.reason });
+        break;
+      case "user-clone":
+        this.#userPrograms.set(msg.task, msg.userProgram);
         break;
       case "user-exec-error":
         this.#event({ ...msg, id });
