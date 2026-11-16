@@ -1,15 +1,25 @@
 # What a boot of the kernel built by tools/wasm/scripts/build.sh (tinyconfig
-# plus the test /init) must print, in order.
-# Used by tools/wasm/scripts/test-boot.sh. Fixed strings, one per line.
+# plus the test programs) must print, in order.
+# Used by tools/wasm/scripts/test-boot.sh. Fixed strings, one per line; each
+# must be found on a later log line than the previous one.
 Linux version
 printk: legacy console [wasmcon0] enabled
 wasm: 131072 KiB linear memory
 clocksource: Switched to clocksource wasm-host
 Run /init as init process
-# From tools/wasm/tests/init/init.c, running in user mode.
+# From tools/wasm/tests/init/, running in user mode.
 init: hello from user space, pid 1, argc 1, argv[0] /init
 init: uname: Linux
 init: bad syscall number returns -ENOSYS
+# clone with an entry function, execve in the child, waitid in the parent.
+# (Process ids depend on how many kernel threads exist, so are not checked
+# here; init itself checks that waitid reports the pid clone returned.)
+, exec /hello
+, argc 3, argv /hello from init, env TEST=1
+ exited with status 42
+# Console input, sent by test-boot.sh when the prompt appears.
+init: type a line:
+init: read 20 bytes: console input works
 init: powering off
 reboot: Power down
 [host] machine halted: poweroff

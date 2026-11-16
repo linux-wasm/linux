@@ -15,7 +15,9 @@ trap 'rm -f "$log"' EXIT
 
 status=0
 node "$WASM_TOOLS/host/node-run.mjs" --kernel "$KOUT/vmlinux.wasm" \
-	--timeout "${BOOT_TIMEOUT:-30}" "$@" > "$log" 2>&1 || status=$?
+	--timeout "${BOOT_TIMEOUT:-30}" \
+	--input 'console input works\n' --input-after 'init: type a line: ' \
+	"$@" > "$log" 2>&1 || status=$?
 
 fail=0
 line=0
