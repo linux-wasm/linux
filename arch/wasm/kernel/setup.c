@@ -3,6 +3,7 @@
 #include <linux/kernel.h>
 #include <linux/memblock.h>
 #include <linux/mm.h>
+#include <linux/panic.h>
 #include <linux/pfn.h>
 #include <linux/sched.h>
 #include <linux/sched/task.h>
@@ -22,6 +23,15 @@ extern char __heap_base[];
 /* init_task's stack; _start (entry.S) points __stack_pointer at its top. */
 unsigned long init_stack[THREAD_SIZE / sizeof(unsigned long)];
 
+/*
+ * panic() calls this in its final loop, after everything has been printed.
+ * Tell the host instead of sleeping forever.
+ */
+static long wasm_panic_blink(int state)
+{
+	wasm_host_halt(WASM_HALT_PANIC);
+}
+
 void __init wasm_start_kernel(void)
 {
 	start_kernel();
@@ -38,6 +48,7 @@ void __init setup_arch(char **cmdline_p)
 	size_t len;
 
 	wasm_console_init();
+	panic_blink = wasm_panic_blink;
 
 	len = wasm_host_get_cmdline(boot_command_line, COMMAND_LINE_SIZE - 1);
 	boot_command_line[min_t(size_t, len, COMMAND_LINE_SIZE - 1)] = '\0';
