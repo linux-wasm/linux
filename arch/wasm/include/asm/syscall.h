@@ -7,7 +7,6 @@
 #include <linux/string.h>
 #include <asm/ptrace.h>
 
-/* FIXME(wasm): no syscall entry path exists yet; these are for generic code. */
 
 static inline long syscall_get_nr(struct task_struct *task, struct pt_regs *regs)
 {

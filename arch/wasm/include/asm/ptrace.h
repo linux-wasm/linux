@@ -6,7 +6,11 @@
 
 #ifndef __ASSEMBLY__
 
-/* FIXME(wasm): there is no user mode yet. */
+/*
+ * FIXME(wasm): always 0. The kernel is only ever entered by a synchronous
+ * call (syscall), never by an interrupt taken in user mode, so nothing
+ * records which mode was interrupted.
+ */
 #define user_mode(regs)			(0)
 #define instruction_pointer(regs)	(0UL)
 #define user_stack_pointer(regs)	(0UL)

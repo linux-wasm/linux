@@ -45,7 +45,7 @@ WASM_LDFLAGS_FINAL := --no-entry --no-gc-sections --no-merge-data-segments \
 		      --global-base=4096 \
 		      -z stack-size=4096 --error-limit=0 -Map=vmlinux.map \
 		      --export=_start --export=wasm_thread_entry \
-		      --export=wasm_raise_irq
+		      --export=wasm_raise_irq --export=wasm_syscall
 WASM_LD_HEAD	:= arch/wasm/kernel/sections_head.o
 WASM_LD_TAIL	:= arch/wasm/kernel/sections_tail.o
 export WASM_LDFLAGS_FINAL WASM_LD_HEAD WASM_LD_TAIL

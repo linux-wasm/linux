@@ -13,6 +13,7 @@
 
 config WASM
 	def_bool y
+	select ARCH_HAS_SYSCALL_WRAPPER
 	select ARCH_NO_PREEMPT
 	select ARCH_NO_SWAP
 	select GENERIC_ATOMIC64

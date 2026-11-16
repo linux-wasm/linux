@@ -11,8 +11,11 @@ struct task_struct;
 void wasm_start_kernel(void);
 void wasm_thread_start(struct task_struct *task);
 
-/* Export for the host, see asm/host.h. */
+/* Exports for the host, see asm/host.h. */
 void wasm_raise_irq(unsigned int irq);
+long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
+		  unsigned long a2, unsigned long a3, unsigned long a4,
+		  unsigned long a5);
 
 void wasm_console_init(void);
 

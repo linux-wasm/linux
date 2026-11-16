@@ -13,11 +13,9 @@
 /*
  * The generic cond_syscall() is a weak assembler alias to sys_ni_syscall.
  * wasm functions are typed, so an alias with a different signature is not
- * valid (and crashes clang 19).
- * FIXME(wasm): there is no syscall table yet, so the fallbacks are simply
- * not emitted. They must come back as typed weak C functions together with
- * the syscall entry path.
+ * valid (and crashes clang 19). asm/syscall_wrapper.h provides COND_SYSCALL
+ * as a typed weak C function instead; this must not be used.
  */
-#define cond_syscall(x)
+#define cond_syscall(x) _Static_assert(0, "use COND_SYSCALL on wasm")
 
 #endif
