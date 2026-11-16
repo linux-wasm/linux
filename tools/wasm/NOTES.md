@@ -1,14 +1,17 @@
 # Linux on WebAssembly — port notes
 
-Status: **M3 and M4 done, M5 partly.** The kernel boots in a browser
-(headless Chromium 147) and under node 22, prints its log into the page,
-runs all initcalls and ends in the expected
+Status: **boots into user space.** The kernel boots in a browser (headless
+Chromium 147) and under node 22, loads a WebAssembly `/init` from its
+built-in initramfs, runs it in user mode and serves its system calls. The
+test init prints a few lines and powers the machine off.
 
-    Kernel panic - not syncing: No working init found.
+That init is a libc-free test program (`tools/wasm/tests/init/init.c`).
+There is no libc, no shell, no fork/exec from user space, no signal
+handlers and no console input yet.
 
-There is no user space, no initramfs and no input. Everything shown in the
-page's `<pre>` is real kernel output, except lines starting with `[host]`,
-which the JavaScript host adds itself and styles differently.
+Everything shown in the page's `<pre>` is real output of the kernel or of
+the user program, except lines starting with `[host]`, which the JavaScript
+host adds itself and styles differently.
 
 ## Layout
 
@@ -20,6 +23,8 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/docker/Dockerfile` | Build environment (stock Debian 13 LLVM 19) |
 | `tools/wasm/scripts/build-env.sh` | Builds the container image `linux-wasm-build:llvm19` |
 | `tools/wasm/scripts/kmake.sh` | Runs `make ARCH=wasm LLVM=...` in the container, output in `build/wasm/` |
+| `tools/wasm/scripts/build.sh` | The standard build: tinyconfig + test init as initramfs + kernel |
+| `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/init.c` to a wasm user program |
 | `tools/wasm/scripts/test-boot.sh` | Headless boot test (node), compares against `tools/wasm/tests/boot-expect.txt` |
 | `tools/wasm/scripts/serve.py` | Dev server with COOP/COEP headers |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
@@ -53,16 +58,19 @@ packages. FIXME(wasm): pin to snapshot.debian.org if bit-for-bit matters.
 ## How to build
 
 ```sh
-tools/wasm/scripts/build-env.sh              # once: build the container image
-tools/wasm/scripts/kmake.sh tinyconfig       # writes build/wasm/.config
-tools/wasm/scripts/kmake.sh -j"$(nproc)"     # builds build/wasm/vmlinux.wasm (~1 min on 16 cores)
-tools/wasm/scripts/test-boot.sh              # boots it under node, checks the log
+tools/wasm/scripts/build-env.sh     # once: build the container image
+tools/wasm/scripts/build.sh         # tinyconfig + test init + kernel -> build/wasm/vmlinux.wasm
+tools/wasm/scripts/test-boot.sh     # boots it under node, checks the log
 ```
 
-Verified from an empty `build/wasm/`: 0 errors, 0 warnings, and the
-`CHKSEC` post-link check passes. Output is `vmlinux` (the wasm module) and an
-identical copy `vmlinux.wasm`, 1.9 MB with tinyconfig (which for this arch
-includes `PRINTK`, `PRINTK_TIME` and `BUG`, see `arch/wasm/configs/tiny.config`).
+`build.sh` takes about a minute on 16 cores and finishes with 0 warnings and
+a passing `CHKSEC` post-link check. `vmlinux.wasm` is 2.2 MB. tinyconfig for
+this arch additionally enables `PRINTK`, `BUG`, `BLK_DEV_INITRD`, `TTY` and
+`BINFMT_WASM` (`arch/wasm/configs/tiny.config`).
+
+For a kernel without the test init:
+`kmake.sh tinyconfig && kmake.sh -j"$(nproc)"` (it then ends in
+"No working init found").
 
 `CONTAINER=podman` switches the container runtime. Building on the host
 directly also works if clang >= 19 *and* `wasm-ld` are installed
@@ -92,7 +100,7 @@ Exit code 0/2 on halt (2 = panic), 3 on a trap, 124 on timeout.
 
 ## Patch series (`wasm-port` on top of `v7.3.4`)
 
-Generic code, one commit each (18 added lines in 3 files, nothing removed):
+Generic code, one commit each (4 files, additions only):
 
 1. `build(kbuild): add clang target triple for ARCH=wasm` — `scripts/Makefile.clang`.
    Kbuild errors out for an arch without a `--target=` entry.
@@ -106,25 +114,25 @@ Generic code, one commit each (18 added lines in 3 files, nothing removed):
 
 Commit subjects follow Conventional Commits, without co-author trailers.
 
-`arch/wasm` only (52 files, ~1600 lines):
+4. `build(initramfs): assemble the built-in initramfs for wasm-ld` —
+   `usr/initramfs_data.S`, a `CONFIG_LD_IS_WASMLD` variant. The file uses
+   ELF section flags and unsized labels, which the wasm assembler rejects,
+   and it is compiled for every arch with `BLK_DEV_INITRD`.
 
-4. `feat(wasm): add architecture skeleton (Kconfig, Makefile)`
-5. `feat(wasm): add asm and uapi headers`
-6. `feat(wasm): define the host interface and add a console on top of it`
-7. `feat(wasm): add boot entry, setup_arch and memory init`
-8. `feat(wasm): add tasks and context switching on host threads`
-9. `feat(wasm): add interrupt delivery, clocksource and clockevent`
-10. `feat(wasm): add __multi3`
-11. `build(wasm): build and link vmlinux with stock wasm-ld`
-12. `feat(wasm/config): enable printk and BUG in tinyconfig`
-13. `fix(wasm): define _sdata, _edata, __bss_start and __bss_stop`
-14. `fix(wasm): refresh vmlinux.wasm on every build and move kernel data out of page 0`
-15. `fix(wasm): start sched_clock at zero from the first call`
-16. `feat(wasm): report a panic to the host`
+`arch/wasm` only:
 
-(In git order the two generic commits 2 and 3 sit between 4 and 5.) Only the
-tip of the series is known to build; commits 5-10 add files that are not
-wired into the build until commit 11.
+- skeleton, headers, host interface and console, boot entry and memory
+  init, tasks on host threads, interrupts and timers, `__multi3`, the link
+  flow, tinyconfig fragment and boot fixes (13 commits, see `git log`)
+- `feat(wasm): add system call entry`
+- `feat(wasm): add a tty on top of the host console`
+- `feat(wasm): add binfmt_wasm and enter user mode`
+- `feat(wasm/config): enable initramfs, tty and binfmt_wasm in tinyconfig`
+- `fix(wasm): let the kernel know the machine can power off`
+
+Only the tip of the series is known to build and boot; the first arch
+commits add files that are not wired into the build until the link-flow
+commit.
 
 Outside `arch/wasm`, without touching existing upstream files:
 `tools/wasm/` (tooling, host, tests, these notes), `README.md`,
@@ -141,47 +149,53 @@ real newer tag yet; only the "already based on" path has run.
 Observed, not assumed:
 
 - Build from scratch, 0 warnings; `wasm-validate --enable-threads` passes.
-- Boot in headless Chromium 147 via `tools/wasm/scripts/serve.py`: page is
-  cross-origin isolated, log appears in `<pre id="console">`, status ends as
-  "halted (panic)", no page errors.
-- Boot under node 22 (`tools/wasm/host/node-run.mjs`): 8 of 8 runs reached the same
-  panic.
-- Along the way: `start_kernel`, banner, memblock/zone setup (128 MiB and
-  64 MiB tried), SLUB, IRQ init, clocksource switch to `wasm-host`, timers,
-  kernel threads (14 host threads alive at the end), all initcall levels,
-  `kernel_init` trying `/sbin/init` ... `/bin/sh`.
+- Boot in headless Chromium 147 (local server and the public page) and
+  under node 22; CI on GitHub runs the build and the boot test.
+- Kernel side: `start_kernel`, memblock/zone setup (128 MiB and 64 MiB
+  tried), SLUB, IRQ init, clocksource `wasm-host`, timers, kernel threads,
+  all initcall levels, built-in initramfs unpacked, `/dev/console` opened.
 - Context switching between host threads, lazy thread creation, idle with
-  timer deadline, timer interrupt delivery, console, command line from the
-  host (`?cmdline=` shows up in "Kernel command line:"), panic reported to
-  the host as a halt.
+  timer deadline, timer interrupt delivery, command line from the host,
+  panic and power-off reported to the host as halts.
+- User mode: `/init` (a position-independent wasm module) is loaded by
+  `binfmt_wasm`, instantiated by the host and entered. From user space the
+  test init has exercised: `write` to the tty, `getpid`, `uname`, an
+  out-of-range syscall number (`-ENOSYS`), `reboot(POWER_OFF)`; argc/argv
+  arrive correctly. 6 of 6 node runs and the Chromium run ended in a clean
+  power-off.
 
 ## What is not exercised or known to be off
 
+- **Only five system calls have ever been called from user space.** The
+  rest of the table links but is untested, including everything involving
+  64-bit arguments, `mmap`, files, and blocking in a syscall.
 - **Boot stalls.** There are gaps of 0.3-1.3 s in the log (before the
   "Memory:" line and before "clocksource: Switched") that vary between
   runs and hosts. Not investigated; most likely something waiting for timer
-  ticks, which are only polled in idle and `cpu_relax()`.
+  ticks, which are only polled in idle, `cpu_relax()` and syscall entry.
+- A user program that loops without making system calls freezes the whole
+  machine: nothing can interrupt running wasm code.
 - Only Chromium and node were tried. Firefox and Safari are untested.
   (The public page https://linux-wasm.github.io/distro/ was checked with
   headless Chromium 147 only.)
 - `wasm_raise_irq` (host-raised interrupts) has never been called; the JS
-  host does not use it yet. `halt` was only seen with reason "panic".
-  Whether any kernel thread has exited through `thread_exit` is unknown.
+  host does not use it yet.
 - The "Memory:" line reports 0K kernel code/data/bss (empty range symbols).
 - Kernel version shows as `7.3.4+` because the tree has commits on top of
   the tag.
-- No user space: `binfmt`, syscalls, initramfs, tty are all absent
-  (`BLK_DEV_INITRD`, `TTY`, `PROC_FS`, `SYSFS` are off in tinyconfig).
+- The initramfs is built into the kernel image; the host cannot supply one.
 
 ## What is stubbed (every `FIXME(wasm)` in the tree)
 
 | Where | What |
 |---|---|
 | `asm/compiler.h`, `asm/linkage.h` | `__builtin_return_address()`, `_RET_IP_`, `_THIS_IP_` are always 0: nothing can name its caller |
-| `asm/linkage.h` | `cond_syscall()` expands to nothing: no `sys_ni` fallbacks, because there is no syscall table |
-| `asm/ptrace.h`, `asm/syscall.h` | no user mode, no syscall entry; `user_mode()` is 0 |
-| `kernel/process.c` | no return to user space (a kernel thread that execs panics), no user fork/clone (`-ENOSYS`), no ptrace (`-EIO`), no stack traces |
-| `kernel/irq.c` | timer is only polled in idle and `cpu_relax()`; long-running kernel code gets no ticks |
+| `asm/ptrace.h` | `user_mode()` is always 0 |
+| `kernel/syscall.c` | signal handlers are never run (signals with a handler are dropped; default actions work), no `rt_sigreturn`, interrupted syscalls return `-EINTR` instead of restarting |
+| `kernel/binfmt_wasm.c` | no `execve` from a running program, no threads; fixed 256 KiB user stack without a guard; no `brk` |
+| `kernel/process.c` | no user fork/vfork/clone (`-ENOSYS`), no ptrace (`-EIO`), no stack traces |
+| `kernel/console.c` | tty is output only: no input from the host, reads block forever |
+| `kernel/irq.c` | timer is only polled in idle, `cpu_relax()` and syscall entry; long-running kernel or user code gets no ticks |
 | `kernel/setup.c` | RAM size fixed at boot, no `memory.grow` |
 | `kernel/sections.c` | text/rodata/init/data/bss ranges are empty; init data is never freed; "Memory:" line shows 0K |
 | `tools/wasm-objcopy.sh` | `.modinfo` stays in the image; `modules.builtin.modinfo` is empty |
@@ -252,8 +266,10 @@ Defined and documented in `arch/wasm/include/asm/host.h`.
 
 Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
-`get_cmdline(ptr, len) -> len`; plus `env.memory` (shared).
-Exports: `_start()`, `wasm_thread_entry(task, sp)`, `wasm_raise_irq(irq)`.
+`get_cmdline(ptr, len) -> len`, `user_exec(image, len, memory_base,
+table_size, sp) -> errno`, `user_run(arg)`; plus `env.memory` (shared).
+Exports: `_start()`, `wasm_thread_entry(task, sp)`, `wasm_raise_irq(irq)`,
+`wasm_syscall(nr, a0..a5)`.
 
 `spawn_thread` means: start a new host thread with a fresh instance of the
 same module on the same memory and call `wasm_thread_entry` with the two
@@ -274,11 +290,34 @@ JavaScript side (`tools/wasm/host/`), no kernel knowledge beyond the list above:
 - A thread that traps or returns from its entry point is reported as a
   `[host]` error line; that is always a kernel or host bug.
 
+## User-space ABI
+
+Defined by this port (documented at the top of
+`arch/wasm/kernel/binfmt_wasm.c`); it is not the ABI of tombl's or
+joelseverin's kernels, so their musl ports do not apply unchanged.
+
+- A program is a position-independent wasm module with a `dylink.0`
+  section (`clang -fPIC`, `wasm-ld -pie --experimental-pic --import-memory
+  --shared-memory --max-memory=4294967296`). It runs inside the kernel's
+  linear memory: no MMU, no isolation between programs or from the kernel.
+- It imports `env.memory`, `env.__memory_base`, `env.__table_base`,
+  `env.__indirect_function_table`, `env.__stack_pointer` as needed, and
+  `linux.syscall` of type `(i32 nr, i32 x 6) -> i32`.
+- System call numbers are the generic 32-bit ones; errors are `-errno`;
+  a 64-bit argument takes two consecutive slots, low word first.
+- It exports `_start(sp)`; `sp` points at `argc, argv[], NULL, envp[], NULL,
+  auxv` like the initial stack of any Linux process.
+- `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
+  flags.
+
 ## Known blockers / risks
 
 - Each kernel task needs its own wasm call stack, so even a uniprocessor
   kernel needs one host thread (Web Worker) per task and shared memory.
   "Single CPU" therefore still requires SharedArrayBuffer and COOP/COEP.
+- fork is impossible without an MMU and vfork/clone/exec need a second
+  instance of the program on a new host thread, plus a way to unwind the
+  old program on exec. That is the next piece of work before a shell.
 - One Worker per kernel task is heavy (14 for an idle tinyconfig kernel)
   and browsers cap the number of workers; a busy user space will hit that.
 - Without preemption or timer polling in running code, a kernel loop that

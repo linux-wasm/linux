@@ -7,10 +7,11 @@ node.
 **Try it: https://linux-wasm.github.io/distro/** (built and deployed from
 [linux-wasm/distro](https://github.com/linux-wasm/distro)).
 
-**Status: early bring-up.** The kernel boots, prints its log, runs all
-initcalls and stops at `Kernel panic - not syncing: No working init found`
-because there is no user space yet. See [tools/wasm/NOTES.md](tools/wasm/NOTES.md)
-for exactly what works, what is stubbed and the known problems.
+**Status: early bring-up.** The kernel boots, loads a WebAssembly `/init`
+from its initramfs and runs it in user mode. That init is a small test
+program without libc; there is no shell yet. See
+[tools/wasm/NOTES.md](tools/wasm/NOTES.md) for exactly what works, what is
+stubbed and the known problems.
 
 The upstream kernel README is the file [README](README).
 
@@ -20,8 +21,7 @@ Requirements: docker (or podman), node >= 20, python3.
 
 ```sh
 tools/wasm/scripts/build-env.sh              # once: toolchain container (stock LLVM 19)
-tools/wasm/scripts/kmake.sh tinyconfig
-tools/wasm/scripts/kmake.sh -j"$(nproc)"     # -> build/wasm/vmlinux.wasm
+tools/wasm/scripts/build.sh                  # -> build/wasm/vmlinux.wasm
 tools/wasm/scripts/test-boot.sh              # headless boot test under node
 tools/wasm/scripts/serve.py                  # http://127.0.0.1:8080/
 ```
@@ -35,14 +35,16 @@ is upstream Linux.
 |---|---|
 | `arch/wasm/` | The architecture: Kconfig, headers, boot, tasks, interrupts, timers, link glue (`arch/wasm/tools/`) |
 | `tools/wasm/docker/` | Build container (pinned toolchain) |
-| `tools/wasm/scripts/` | `build-env.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `serve.py` (dev server with COOP/COEP), `sync-upstream.sh` |
+| `tools/wasm/scripts/` | `build-env.sh`, `build.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `serve.py` (dev server with COOP/COEP), `sync-upstream.sh` |
 | `tools/wasm/host/` | The JavaScript host: browser page and node runner. The only place that knows about browsers |
-| `tools/wasm/tests/` | Expected boot log for the boot test |
+| `tools/wasm/tests/` | Test `/init` (no libc) and the expected boot log |
 | `tools/wasm/NOTES.md` | Port notes: versions, design, stubs, blockers |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 
-The kernel/host contract (six imports, three exports) is documented in
-[arch/wasm/include/asm/host.h](arch/wasm/include/asm/host.h).
+The kernel/host contract is documented in
+[arch/wasm/include/asm/host.h](arch/wasm/include/asm/host.h), the ABI of
+user programs in
+[arch/wasm/kernel/binfmt_wasm.c](arch/wasm/kernel/binfmt_wasm.c).
 
 ## Related repositories
 
@@ -69,7 +71,7 @@ User space (musl, BusyBox, initramfs) is deliberately kept out of this tree.
 - Keep changes inside `arch/wasm/` and `tools/wasm/` whenever possible.
 - If generic kernel code must change, put that change in its own commit
   and explain in the message why it cannot be done in the arch. The port
-  currently carries three such commits; the list is in the notes.
+  currently carries four such commits; the list is in the notes.
 - One logical change per commit, in English, with a
   [Conventional Commits](https://www.conventionalcommits.org/) subject:
   `feat(wasm): ...`, `fix(wasm): ...`, `build(tools/wasm): ...`,
