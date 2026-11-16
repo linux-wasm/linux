@@ -13,6 +13,14 @@ main(int argc, char **argv)
 		fprintf(stderr, "Error: input truncated\n");
 		return 1;
 	}
+	if (memcmp(ei, "\0asm", 4) == 0) {
+		/*
+		 * WebAssembly objects are not ELF. modpost silently skips
+		 * them, but it still needs a class to compile: wasm32.
+		 */
+		printf("#define KERNEL_ELFCLASS ELFCLASS32\n");
+		return 0;
+	}
 	if (memcmp(ei, ELFMAG, SELFMAG) != 0) {
 		fprintf(stderr, "Error: not ELF\n");
 		return 1;
