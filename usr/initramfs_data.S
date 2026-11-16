@@ -22,6 +22,32 @@
   in the ELF header, as required by certain architectures.
 */
 
+#ifdef CONFIG_LD_IS_WASMLD
+
+/*
+ * WebAssembly object files have no ELF section flags, every data symbol
+ * needs an explicit size, and there is no linker script to provide
+ * __initramfs_start, so it is defined here.
+ */
+	.section .init.ramfs,"",@
+	.globl	__initramfs_start
+	.type	__initramfs_start,@object
+__initramfs_start:
+	.incbin	"usr/initramfs_inc_data"
+__irf_end:
+	.size	__irf_end, 0
+	.size	__initramfs_start, __irf_end - __initramfs_start
+
+	.section .init.ramfs.info,"",@
+	.globl	__initramfs_size
+	.type	__initramfs_size,@object
+	.p2align 2
+__initramfs_size:
+	.long	__irf_end - __initramfs_start
+	.size	__initramfs_size, 4
+
+#else /* !CONFIG_LD_IS_WASMLD */
+
 .section .init.ramfs,"a"
 __irf_start:
 .incbin "usr/initramfs_inc_data"
@@ -34,3 +60,5 @@ __initramfs_size:
 #else
 	.long __irf_end - __irf_start
 #endif
+
+#endif /* CONFIG_LD_IS_WASMLD */
