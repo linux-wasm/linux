@@ -79,6 +79,9 @@ export class Machine {
         this.#workers.clear();
         this.#event({ type: "halt", id, reason: HALT_REASONS[msg.reason] ?? msg.reason });
         break;
+      case "user-exec-error":
+        this.#event({ ...msg, id });
+        break;
       case "returned":
       case "trap":
         // The kernel never returns from an entry point; either is a bug.

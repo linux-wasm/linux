@@ -63,6 +63,9 @@ const machine = new Machine({
         note(`thread ${event.id} trapped: ${event.message}\n${event.stack}`);
         finish(3);
         break;
+      case "user-exec-error":
+        note(`thread ${event.id}: cannot load user program: ${event.message}`);
+        break;
       case "worker-error":
         note(`worker ${event.id} failed: ${event.message}`);
         finish(3);
