@@ -59,6 +59,15 @@
 
 __visible u64 jiffies_64 __cacheline_aligned_in_smp = INITIAL_JIFFIES;
 
+#ifdef CONFIG_LD_IS_WASMLD
+/*
+ * Other architectures place jiffies at the low word of jiffies_64 in their
+ * linker script. wasm-ld has no linker scripts, but a data alias expresses
+ * the same relationship (wasm is little endian) in the object file.
+ */
+extern unsigned long volatile jiffies __attribute__((alias("jiffies_64")));
+#endif
+
 EXPORT_SYMBOL(jiffies_64);
 
 /*
