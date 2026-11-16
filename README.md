@@ -4,6 +4,9 @@ This is the Linux kernel source tree with one addition: `arch/wasm`, a port
 of the kernel to WebAssembly (wasm32) that boots in a browser tab or under
 node.
 
+**Try it: https://linux-wasm.github.io/distro/** (built and deployed from
+[linux-wasm/distro](https://github.com/linux-wasm/distro)).
+
 **Status: early bring-up.** The kernel boots, prints its log, runs all
 initcalls and stops at `Kernel panic - not syncing: No working init found`
 because there is no user space yet. See [tools/wasm/NOTES.md](tools/wasm/NOTES.md)

@@ -24,7 +24,7 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/scripts/serve.py` | Dev server with COOP/COEP headers |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
 | `tools/wasm/host/` | JavaScript host: `index.html`, `host.js`, `worker.js` (browser), `node-run.mjs`, `node-worker.mjs` (node), shared `machine.js`, `thread.js` |
-| `.github/workflows/wasm.yml` | CI: build + boot test. Written but never run on GitHub |
+| `.github/workflows/wasm.yml` | CI: build + boot test |
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
 
@@ -162,6 +162,8 @@ Observed, not assumed:
   runs and hosts. Not investigated; most likely something waiting for timer
   ticks, which are only polled in idle and `cpu_relax()`.
 - Only Chromium and node were tried. Firefox and Safari are untested.
+  (The public page https://linux-wasm.github.io/distro/ was checked with
+  headless Chromium 147 only.)
 - `wasm_raise_irq` (host-raised interrupts) has never been called; the JS
   host does not use it yet. `halt` was only seen with reason "panic".
   Whether any kernel thread has exited through `thread_exit` is unknown.
