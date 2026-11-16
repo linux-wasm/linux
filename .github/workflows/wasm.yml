@@ -21,11 +21,8 @@ jobs:
       - name: Build toolchain image
         run: tools/wasm/scripts/build-env.sh
 
-      - name: Configure
-        run: tools/wasm/scripts/kmake.sh tinyconfig
-
-      - name: Build
-        run: tools/wasm/scripts/kmake.sh -j"$(nproc)"
+      - name: Build (tinyconfig + test init)
+        run: tools/wasm/scripts/build.sh
 
       - name: Boot test
         run: tools/wasm/scripts/test-boot.sh
