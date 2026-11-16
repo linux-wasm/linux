@@ -68,8 +68,8 @@ tools/wasm/scripts/test-boot.sh     # boots it under node, checks the log
 
 `build.sh` takes about a minute on 16 cores and finishes with 0 warnings and
 a passing `CHKSEC` post-link check. `vmlinux.wasm` is 2.2 MB. tinyconfig for
-this arch additionally enables `PRINTK`, `BUG`, `BLK_DEV_INITRD`, `TTY` and
-`BINFMT_WASM` (`arch/wasm/configs/tiny.config`).
+this arch additionally enables `PRINTK`, `BUG`, `BLK_DEV_INITRD`, `TTY`,
+`FUTEX` and `BINFMT_WASM` (`arch/wasm/configs/tiny.config`).
 
 For a kernel without the test init:
 `kmake.sh tinyconfig && kmake.sh -j"$(nproc)"` (it then ends in
@@ -182,9 +182,10 @@ Observed, not assumed:
 - **Only about a dozen system calls have ever been called from user
   space** (listed above). The rest of the table links but is untested,
   including everything with 64-bit arguments, file I/O, pipes and signals.
-- Threads (`clone` without `CLONE_VFORK`), several processes running at
-  once, and `execve` in a process that was not created by `clone` from the
-  test have not been tried.
+- The kernel's own tests do not cover threads or files. Those are covered
+  from linux-wasm/distro (`/bin/selftest`, built with musl): pthreads with
+  a mutex and join, files with 64-bit offsets, pipes, `nanosleep`, wall
+  clock. Several processes running at once has not been tried.
 - **Boot stalls.** There are gaps of 0.3-1.3 s in the log (before the
   "Memory:" line and before "clocksource: Switched") that vary between
   runs and hosts. Not investigated; most likely something waiting for timer
@@ -278,6 +279,7 @@ link time until they are added to the head/tail files.
 Defined and documented in `arch/wasm/include/asm/host.h`.
 
 Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
+`clock_realtime_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
 `get_cmdline(ptr, len) -> len`, `console_read(ptr, len) -> n`,
 `user_exec(image, len, memory_base, table_size, sp) -> errno`,
