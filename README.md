@@ -41,10 +41,22 @@ is upstream Linux.
 The kernel/host contract (six imports, three exports) is documented in
 [arch/wasm/include/asm/host.h](arch/wasm/include/asm/host.h).
 
+## Related repositories
+
+| Repository | Role |
+|---|---|
+| [linux-wasm/linux](https://github.com/linux-wasm/linux) | This one: the kernel |
+| [linux-wasm/musl](https://github.com/linux-wasm/musl) | C library for user space (port not started) |
+| [linux-wasm/distro](https://github.com/linux-wasm/distro) | Builds kernel + user space into something bootable; pins a commit of this repository |
+
+User space (musl, BusyBox, initramfs) is deliberately kept out of this tree.
+
 ## Branches and upstream
 
 - `wasm-port` is the development branch and the target for pull requests.
   It is based on an upstream stable tag (currently `v7.3.4`).
+- `master` is an untouched mirror of torvalds/linux from the time of the
+  fork; nothing is developed there.
 - Remote `upstream` is kernel.org stable. New upstream releases are brought
   in with `tools/wasm/scripts/sync-upstream.sh <tag>`, which merges the tag
   (or, with `--rebase`, replays the port on top of it as a clean series).

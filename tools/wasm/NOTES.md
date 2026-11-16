@@ -28,8 +28,10 @@ This repository is the kernel tree. The port adds:
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
 
-Git: branch `wasm-port`; remote `origin` is the GitHub repository, remote
-`upstream` is kernel.org stable.
+Git: branch `wasm-port`; remote `origin` is
+https://github.com/linux-wasm/linux, remote `upstream` is kernel.org stable.
+User space lives in other repositories of the linux-wasm organisation
+(`musl`, `distro`), never in this tree.
 
 ## Exact versions
 
