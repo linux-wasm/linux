@@ -10,6 +10,9 @@
  * therefore always false, and free_initmem() frees nothing.
  *
  * FIXME(wasm): init data is never freed.
+ * FIXME(wasm): _sdata/_edata/__bss_start/__bss_stop are empty too (wasm-ld
+ * offers no symbols to alias them to), so the "Memory:" boot line reports
+ * 0K for kernel code, data and bss.
  */
 #include "sections.h"
 
@@ -23,3 +26,5 @@ WASM_EMPTY_RANGE(__init_begin, __init_end);
 WASM_EMPTY_RANGE(__start_rodata, __end_rodata);
 WASM_EMPTY_RANGE(__sched_text_start, __sched_text_end);
 WASM_EMPTY_RANGE(__cpuidle_text_start, __cpuidle_text_end);
+WASM_EMPTY_RANGE(_sdata, _edata);
+WASM_EMPTY_RANGE(__bss_start, __bss_stop);
