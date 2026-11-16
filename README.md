@@ -8,8 +8,9 @@ node.
 [linux-wasm/distro](https://github.com/linux-wasm/distro)).
 
 **Status: early bring-up.** The kernel boots, loads a WebAssembly `/init`
-from its initramfs and runs it in user mode. That init is a small test
-program without libc; there is no shell yet. See
+from its initramfs and runs it in user mode. Programs can make system
+calls, `clone` and `execve` other programs, and read console input. The
+programs are small tests without libc; there is no shell yet. See
 [tools/wasm/NOTES.md](tools/wasm/NOTES.md) for exactly what works, what is
 stubbed and the known problems.
 
@@ -37,7 +38,7 @@ is upstream Linux.
 | `tools/wasm/docker/` | Build container (pinned toolchain) |
 | `tools/wasm/scripts/` | `build-env.sh`, `build.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `serve.py` (dev server with COOP/COEP), `sync-upstream.sh` |
 | `tools/wasm/host/` | The JavaScript host: browser page and node runner. The only place that knows about browsers |
-| `tools/wasm/tests/` | Test `/init` (no libc) and the expected boot log |
+| `tools/wasm/tests/` | Test programs (no libc) and the expected boot log |
 | `tools/wasm/NOTES.md` | Port notes: versions, design, stubs, blockers |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 

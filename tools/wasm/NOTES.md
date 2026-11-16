@@ -1,16 +1,16 @@
 # Linux on WebAssembly — port notes
 
-Status: **boots into user space.** The kernel boots in a browser (headless
-Chromium 147) and under node 22, loads a WebAssembly `/init` from its
-built-in initramfs, runs it in user mode and serves its system calls. The
-test init prints a few lines and powers the machine off.
+Status: **boots into user space; processes and console input work.** The
+kernel boots in a browser (headless Chromium 147) and under node 22, loads
+a WebAssembly `/init` from its built-in initramfs and runs it in user mode.
+User programs can make system calls, create a child with `clone`, `execve`
+another program, wait for it, and read what is typed on the console.
 
-That init is a libc-free test program (`tools/wasm/tests/init/init.c`).
-There is no libc, no shell, no fork/exec from user space, no signal
-handlers and no console input yet.
+The programs doing this are libc-free tests (`tools/wasm/tests/init/`).
+There is no libc and no shell yet, and signal handlers do not run.
 
 Everything shown in the page's `<pre>` is real output of the kernel or of
-the user program, except lines starting with `[host]`, which the JavaScript
+user programs, except lines starting with `[host]`, which the JavaScript
 host adds itself and styles differently.
 
 ## Layout
@@ -24,11 +24,11 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/scripts/build-env.sh` | Builds the container image `linux-wasm-build:llvm19` |
 | `tools/wasm/scripts/kmake.sh` | Runs `make ARCH=wasm LLVM=...` in the container, output in `build/wasm/` |
 | `tools/wasm/scripts/build.sh` | The standard build: tinyconfig + test init as initramfs + kernel |
-| `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/init.c` to a wasm user program |
+| `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/{init,hello}.c` to wasm user programs |
 | `tools/wasm/scripts/test-boot.sh` | Headless boot test (node), compares against `tools/wasm/tests/boot-expect.txt` |
 | `tools/wasm/scripts/serve.py` | Dev server with COOP/COEP headers |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
-| `tools/wasm/host/` | JavaScript host: `index.html`, `host.js`, `worker.js` (browser), `node-run.mjs`, `node-worker.mjs` (node), shared `machine.js`, `thread.js` |
+| `tools/wasm/host/` | JavaScript host: `index.html`, `host.js`, `worker.js` (browser), `node-run.mjs`, `node-worker.mjs` (node), shared `machine.js`, `thread.js`, `input.js` |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
@@ -127,6 +127,8 @@ Commit subjects follow Conventional Commits, without co-author trailers.
 - `feat(wasm): add system call entry`
 - `feat(wasm): add a tty on top of the host console`
 - `feat(wasm): add binfmt_wasm and enter user mode`
+- `feat(wasm): add console input`
+- `feat(wasm): support clone and execve from user programs`
 - `feat(wasm/config): enable initramfs, tty and binfmt_wasm in tinyconfig`
 - `fix(wasm): let the kernel know the machine can power off`
 
@@ -158,17 +160,28 @@ Observed, not assumed:
   timer deadline, timer interrupt delivery, command line from the host,
   panic and power-off reported to the host as halts.
 - User mode: `/init` (a position-independent wasm module) is loaded by
-  `binfmt_wasm`, instantiated by the host and entered. From user space the
-  test init has exercised: `write` to the tty, `getpid`, `uname`, an
-  out-of-range syscall number (`-ENOSYS`), `reboot(POWER_OFF)`; argc/argv
-  arrive correctly. 6 of 6 node runs and the Chromium run ended in a clean
-  power-off.
+  `binfmt_wasm`, instantiated by the host and entered; argc/argv/envp
+  arrive correctly.
+- System calls exercised from user space: `write`, `read`, `getpid`,
+  `uname`, `mmap2`, `munmap`, `clone`, `execve`, `waitid`, `exit`,
+  `reboot`, and an out-of-range number (`-ENOSYS`).
+- Processes: `clone(CLONE_VM | CLONE_VFORK)` with an entry function, the
+  child `execve`s a second program with arguments and environment, the
+  parent sees its exit status with `waitid`.
+- Console input: bytes typed in the page (or passed to `node-run.mjs
+  --input`) reach a `read()` on `/dev/console`, with tty echo and
+  backspace editing.
+- The boot test passed 6 of 6 times under node; the same sequence,
+  including typing with key events, was checked in headless Chromium.
 
 ## What is not exercised or known to be off
 
-- **Only five system calls have ever been called from user space.** The
-  rest of the table links but is untested, including everything involving
-  64-bit arguments, `mmap`, files, and blocking in a syscall.
+- **Only about a dozen system calls have ever been called from user
+  space** (listed above). The rest of the table links but is untested,
+  including everything with 64-bit arguments, file I/O, pipes and signals.
+- Threads (`clone` without `CLONE_VFORK`), several processes running at
+  once, and `execve` in a process that was not created by `clone` from the
+  test have not been tried.
 - **Boot stalls.** There are gaps of 0.3-1.3 s in the log (before the
   "Memory:" line and before "clocksource: Switched") that vary between
   runs and hosts. Not investigated; most likely something waiting for timer
@@ -178,8 +191,6 @@ Observed, not assumed:
 - Only Chromium and node were tried. Firefox and Safari are untested.
   (The public page https://linux-wasm.github.io/distro/ was checked with
   headless Chromium 147 only.)
-- `wasm_raise_irq` (host-raised interrupts) has never been called; the JS
-  host does not use it yet.
 - The "Memory:" line reports 0K kernel code/data/bss (empty range symbols).
 - Kernel version shows as `7.3.4+` because the tree has commits on top of
   the tag.
@@ -192,9 +203,8 @@ Observed, not assumed:
 | `asm/compiler.h`, `asm/linkage.h` | `__builtin_return_address()`, `_RET_IP_`, `_THIS_IP_` are always 0: nothing can name its caller |
 | `asm/ptrace.h` | `user_mode()` is always 0 |
 | `kernel/syscall.c` | signal handlers are never run (signals with a handler are dropped; default actions work), no `rt_sigreturn`, interrupted syscalls return `-EINTR` instead of restarting |
-| `kernel/binfmt_wasm.c` | no `execve` from a running program, no threads; fixed 256 KiB user stack without a guard; no `brk` |
-| `kernel/process.c` | no user fork/vfork/clone (`-ENOSYS`), no ptrace (`-EIO`), no stack traces |
-| `kernel/console.c` | tty is output only: no input from the host, reads block forever |
+| `kernel/binfmt_wasm.c` | fixed 256 KiB user stack without a guard; no `brk` |
+| `kernel/process.c` | `fork()` and a `vfork()` that returns twice are impossible: `clone` needs `CLONE_VM`, a stack and an entry function. No ptrace (`-EIO`), no stack traces |
 | `kernel/irq.c` | timer is only polled in idle, `cpu_relax()` and syscall entry; long-running kernel or user code gets no ticks |
 | `kernel/setup.c` | RAM size fixed at boot, no `memory.grow` |
 | `kernel/sections.c` | text/rodata/init/data/bss ranges are empty; init data is never freed; "Memory:" line shows 0K |
@@ -266,8 +276,10 @@ Defined and documented in `arch/wasm/include/asm/host.h`.
 
 Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
-`get_cmdline(ptr, len) -> len`, `user_exec(image, len, memory_base,
-table_size, sp) -> errno`, `user_run(arg)`; plus `env.memory` (shared).
+`get_cmdline(ptr, len) -> len`, `console_read(ptr, len) -> n`,
+`user_exec(image, len, memory_base, table_size, sp) -> errno`,
+`user_clone(task)`, `user_run(arg, entry) -> unwound`, `user_unwind()`;
+plus `env.memory` (shared). Interrupt 1 is console input.
 Exports: `_start()`, `wasm_thread_entry(task, sp)`, `wasm_raise_irq(irq)`,
 `wasm_syscall(nr, a0..a5)`.
 
@@ -307,6 +319,14 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   a 64-bit argument takes two consecutive slots, low word first.
 - It exports `_start(sp)`; `sp` points at `argc, argv[], NULL, envp[], NULL,
   auxv` like the initial stack of any Linux process.
+- `clone()` never returns in the child. The child runs on a new instance
+  of the module (same memory) and starts at the export
+  `__clone_entry(stack)`, where `stack` is clone's stack argument.
+  `CLONE_VM` and a stack are mandatory. This is the shape of musl's
+  `__clone(fn, stack, ...)` and enough for `posix_spawn` and threads, but
+  `fork()` and a `vfork()` that returns twice cannot exist. Programs that
+  call `vfork()` directly (BusyBox does) will need patching.
+- `execve()` works: the old program's frames are thrown away by the host.
 - `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
   flags.
 
@@ -315,9 +335,10 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
 - Each kernel task needs its own wasm call stack, so even a uniprocessor
   kernel needs one host thread (Web Worker) per task and shared memory.
   "Single CPU" therefore still requires SharedArrayBuffer and COOP/COEP.
-- fork is impossible without an MMU and vfork/clone/exec need a second
-  instance of the program on a new host thread, plus a way to unwind the
-  old program on exec. That is the next piece of work before a shell.
+- BusyBox's shell and init use `vfork()`; with this ABI they need a libc
+  `vfork` built on something like setjmp, or patches to use `posix_spawn`.
+- Signal handlers cannot run yet, which a shell needs for Ctrl-C and
+  job control.
 - One Worker per kernel task is heavy (14 for an idle tinyconfig kernel)
   and browsers cap the number of workers; a busy user space will hit that.
 - Without preemption or timer polling in running code, a kernel loop that
