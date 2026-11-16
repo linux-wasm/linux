@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gcc \
         git \
         libc6-dev \
+        libclang-rt-19-dev-wasm32 \
         libelf-dev \
         libssl-dev \
         lld-19 \
@@ -33,6 +34,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         wabt \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# libclang-rt-19-dev-wasm32 is not needed by the kernel (it carries its own
+# __multi3) but by user space: musl and programs link compiler-rt builtins.
 
 # Kbuild is invoked with LLVM=/usr/lib/llvm-19/bin/ (see tools/wasm/scripts/kmake.sh),
 # which resolves clang, llvm-ar, ... from that directory; arch/wasm/Makefile

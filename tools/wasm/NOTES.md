@@ -7,7 +7,9 @@ User programs can make system calls, create a child with `clone`, `execve`
 another program, wait for it, and read what is typed on the console.
 
 The programs doing this are libc-free tests (`tools/wasm/tests/init/`).
-There is no libc and no shell yet, and signal handlers do not run.
+A musl port exists in linux-wasm/musl and C programs built with it run
+(`printf`, `malloc`, `posix_spawn`); the kernel's own tests do not depend on
+it. There is no shell yet, and signal handlers do not run.
 
 Everything shown in the page's `<pre>` is real output of the kernel or of
 user programs, except lines starting with `[host]`, which the JavaScript
@@ -47,6 +49,7 @@ User space lives in other repositories of the linux-wasm organisation
 | clang | Debian clang 19.1.7 (`clang-19 1:19.1.7-3+b1`) |
 | wasm-ld | Debian LLD 19.1.7 (`lld-19 1:19.1.7-3+b1`) — **stock, unpatched** |
 | llvm binutils | `llvm-19 1:19.1.7-3+b1` |
+| compiler-rt (user space only) | `libclang-rt-19-dev-wasm32`, same LLVM 19.1.7 |
 | wabt | 1.0.36 |
 | GNU make | 4.4.1 |
 | node (headless tests, later) | v20.19.2 |
