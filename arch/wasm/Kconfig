@@ -2,7 +2,7 @@
 #
 # WebAssembly (wasm32) architecture.
 #
-# Design notes (see also Documentation in the out-of-tree NOTES.md):
+# Design notes (see also tools/wasm/NOTES.md):
 #  - No MMU: the kernel lives in one flat wasm linear memory.
 #  - Uniprocessor for now. SMP (one host thread per CPU) comes later.
 #  - No loadable modules: there is no wasm dynamic loader in the kernel.
