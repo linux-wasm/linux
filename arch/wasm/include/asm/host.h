@@ -8,7 +8,11 @@
  *
  * Imports (wasm module "host"), called by the kernel:
  *
- *   console_write(ptr, len)   Write kernel log bytes. Must not block.
+ *   console_write(ptr, len)   Write console output bytes. Must not block.
+ *   console_read(ptr, len)    Copy up to len bytes of pending console input,
+ *     -> i32                  return how many (0 if none). Must not block.
+ *                             The host announces new input by raising
+ *                             interrupt 1 (wasm_raise_irq).
  *   clock_ns() -> i64         Monotonic clock in nanoseconds.
  *   spawn_thread(task, sp)    Start a new host thread on a fresh instance
  *                             of this module sharing the same memory, and
@@ -33,8 +37,20 @@
  *                             wasm_syscall export. Then call the program's
  *                             __wasm_apply_data_relocs export if it has
  *                             one. Returns 0 or a negative errno.
- *   user_run(arg)             Call the program's _start(arg) export.
- *                             Returns if _start returns.
+ *   user_clone(task)          The thread that will later be spawned for
+ *                             task (spawn_thread) must get its own
+ *                             instance of the calling thread's program:
+ *                             same module, memory_base and table_size.
+ *   user_run(arg, entry)      Enter the thread's program: call its export
+ *     -> i32                  _start(arg) for entry WASM_USER_START, or
+ *                             for WASM_USER_CLONE instantiate the program
+ *                             announced by user_clone, with arg as
+ *                             __stack_pointer, and call its export
+ *                             __clone_entry(arg). Returns 0 if that call
+ *                             returns, 1 if it was ended by user_unwind.
+ *   user_unwind()             Abandon the running program: unwind the host
+ *                             stack up to the user_run call that entered
+ *                             it and make that return 1. Does not return.
  *
  * Exports, called by the host:
  *
@@ -90,8 +106,22 @@ int wasm_host_user_exec(const void *image, size_t len,
 			unsigned long memory_base, unsigned long table_size,
 			unsigned long sp);
 
+__wasm_host(console_read)
+int wasm_host_console_read(char *buf, size_t len);
+
+enum wasm_user_entry {
+	WASM_USER_START = 0,
+	WASM_USER_CLONE = 1,
+};
+
+__wasm_host(user_clone)
+void wasm_host_user_clone(struct task_struct *task);
+
 __wasm_host(user_run)
-void wasm_host_user_run(unsigned long arg);
+int wasm_host_user_run(unsigned long arg, int entry);
+
+__wasm_host(user_unwind)
+void __noreturn wasm_host_user_unwind(void);
 
 #endif /* __ASSEMBLY__ */
 #endif
