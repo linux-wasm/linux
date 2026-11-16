@@ -142,4 +142,5 @@ void machine_power_off(void)
 	wasm_host_halt(WASM_HALT_POWEROFF);
 }
 
-void (*pm_power_off)(void);
+/* Non-NULL so that the kernel knows the machine can power off. */
+void (*pm_power_off)(void) = machine_power_off;
