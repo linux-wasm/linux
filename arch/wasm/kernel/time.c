@@ -15,9 +15,14 @@
 
 static u64 wasm_clock_origin;
 
+/* printk timestamps call this long before time_init(). */
 unsigned long long sched_clock(void)
 {
-	return wasm_host_clock_ns() - wasm_clock_origin;
+	u64 now = wasm_host_clock_ns();
+
+	if (!wasm_clock_origin)
+		wasm_clock_origin = now;
+	return now - wasm_clock_origin;
 }
 
 static u64 wasm_clocksource_read(struct clocksource *cs)
@@ -67,8 +72,6 @@ static irqreturn_t wasm_timer_interrupt(int irq, void *dev)
 
 void __init time_init(void)
 {
-	wasm_clock_origin = wasm_host_clock_ns();
-
 	if (clocksource_register_hz(&wasm_clocksource, NSEC_PER_SEC))
 		panic("wasm: cannot register clocksource");
 
