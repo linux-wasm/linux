@@ -9,6 +9,7 @@
  */
 #define NR_IRQS		32
 #define WASM_IRQ_TIMER	0
+#define WASM_IRQ_CONSOLE	1	/* part of the host interface, asm/host.h */
 
 #include <asm-generic/irq.h>
 
