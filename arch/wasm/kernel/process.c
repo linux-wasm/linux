@@ -41,6 +41,20 @@ static __always_inline void wasm_set_stack_pointer(unsigned long sp)
 			 : : "r"(sp));
 }
 
+static __always_inline void wasm_set_current(struct task_struct *task)
+{
+	__asm__ volatile("local.get %0\n"
+			 "global.set __wasm_current"
+			 : : "r"(task));
+}
+
+/*
+ * Normally a host thread belongs to one task for life. The vfork emulation
+ * (vfork.c) moves a thread between a parent and its child: the task named
+ * here takes over the calling thread at the next switch away from it.
+ */
+struct task_struct *wasm_thread_handoff;
+
 /* The task we most recently switched away from. Protected by being UP. */
 static struct task_struct *wasm_last_task;
 
@@ -52,6 +66,10 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	 * @prev (including its stack) at any time.
 	 */
 	bool dead = READ_ONCE(prev->__state) == TASK_DEAD;
+	/* The task this host thread carries once it runs again. */
+	struct task_struct *self = wasm_thread_handoff ?: prev;
+
+	wasm_thread_handoff = NULL;
 
 	wasm_last_task = prev;
 	__atomic_store_n(&prev->thread.run, 0, __ATOMIC_SEQ_CST);
@@ -71,9 +89,10 @@ struct task_struct *__switch_to(struct task_struct *prev,
 	if (dead)
 		wasm_host_thread_exit();
 
-	while (!__atomic_load_n(&prev->thread.run, __ATOMIC_SEQ_CST))
-		__builtin_wasm_memory_atomic_wait32(&prev->thread.run, 0, -1);
+	while (!__atomic_load_n(&self->thread.run, __ATOMIC_SEQ_CST))
+		__builtin_wasm_memory_atomic_wait32(&self->thread.run, 0, -1);
 
+	wasm_set_current(self);
 	return wasm_last_task;
 }
 
@@ -102,6 +121,14 @@ void wasm_thread_start(struct task_struct *task)
 
 	local_irq_enable();
 
+	/* A vfork child that called exit() on its parent's thread. */
+	if (task->thread.exit_pending)
+		do_group_exit((task->thread.exit_code & 0xff) << 8);
+
+	/* A vfork child that exec'd there starts its program here. */
+	if (task->thread.exec_image)
+		entry = WASM_USER_START;
+
 	/*
 	 * Run the program. If it execs, wasm_syscall() has the host unwind
 	 * everything above this frame, including the kernel frames of that
@@ -113,6 +140,8 @@ void wasm_thread_start(struct task_struct *task)
 		unsigned long sp = wasm_get_stack_pointer();
 
 		task->thread.exec_pending = 0;
+		if (task->thread.exec_image && wasm_user_instantiate())
+			do_group_exit(SIGKILL);
 		if (!wasm_host_user_run(task->thread.user_sp, entry))
 			break;
 		wasm_set_stack_pointer(sp);
@@ -143,11 +172,23 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	 * a stack of its own and the parent's memory (there is no MMU to
 	 * copy an address space anyway).
 	 *
-	 * FIXME(wasm): fork() and vfork() proper (returning twice) are not
-	 * possible this way; a libc has to build them, or posix_spawn, on
-	 * clone with an entry function.
+	 * fork() is impossible. vfork() is provided separately by the
+	 * wasm_vfork system call, which lends the child the parent's thread
+	 * (vfork.c).
 	 */
-	if (!current->thread.user || !(args->flags & CLONE_VM) || !args->stack)
+	if (!current->thread.user || !(args->flags & CLONE_VM))
+		return -EINVAL;
+
+	if (current->thread.vfork_request) {
+		/* wasm_vfork(): the child runs on the parent's thread. */
+		p->thread.user = 1;
+		p->thread.spawned = 1;
+		p->thread.vfork_parent = current;
+		current->thread.vfork_child = p;
+		return 0;
+	}
+
+	if (!args->stack)
 		return -EINVAL;
 
 	p->thread.user = 1;

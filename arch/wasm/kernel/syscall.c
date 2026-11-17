@@ -75,13 +75,20 @@ static void wasm_exit_to_user_mode(struct pt_regs *regs)
 {
 	unsigned long flags;
 
-	while ((flags = read_thread_flags()) &
-	       (_TIF_NEED_RESCHED | _TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL |
-		_TIF_NOTIFY_RESUME)) {
+	unsigned long work = _TIF_NEED_RESCHED | _TIF_NOTIFY_RESUME;
+
+	/*
+	 * A vfork child on its parent's thread must not be killed there
+	 * (vfork.c); its signals wait until it has a thread of its own.
+	 */
+	if (!current->thread.vfork_parent)
+		work |= _TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL;
+
+	while ((flags = read_thread_flags()) & work) {
 		if (flags & _TIF_NEED_RESCHED)
 			schedule();
 
-		if (flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL)) {
+		if (flags & work & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL)) {
 			struct ksignal ksig;
 
 			get_signal(&ksig);
@@ -121,10 +128,27 @@ long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
 	regs->syscall_args[4] = a4;
 	regs->syscall_args[5] = a5;
 
-	if ((unsigned long)nr < NR_syscalls)
+	if (nr == __NR_wasm_vfork) {
+		/* Returns as the child, with the child's pt_regs. */
+		long ret = wasm_vfork();
+
+		regs = task_pt_regs(current);
+		regs->syscall_ret = ret;
+	} else if (current->thread.vfork_parent &&
+		   (nr == __NR_exit || nr == __NR_exit_group)) {
+		/* Exit on a thread of its own, not on the parent's. */
+		current->thread.exit_pending = 1;
+		current->thread.exit_code = a0;
+		return wasm_vfork_leave();
+	} else if ((unsigned long)nr < NR_syscalls) {
 		regs->syscall_ret = sys_call_table[nr](regs);
-	else
+	} else {
 		regs->syscall_ret = -ENOSYS;
+	}
+
+	/* A vfork child that exec'd: hand the thread back to the parent. */
+	if (current->thread.vfork_parent && current->thread.exec_pending)
+		return wasm_vfork_leave();
 
 	wasm_exit_to_user_mode(regs);
 

@@ -24,6 +24,18 @@ struct thread_struct {
 	 * the old program must not be resumed. See wasm_syscall().
 	 */
 	int exec_pending;
+	/*
+	 * A program that binfmt_wasm has loaded but the host has not yet
+	 * instantiated; that happens on the thread that will run it.
+	 */
+	void *exec_image;
+	unsigned long exec_len, exec_base, exec_table;
+	/* Thread-borrowing vfork, see arch/wasm/kernel/vfork.c. */
+	struct task_struct *vfork_parent;	/* child: whose thread I run on */
+	struct task_struct *vfork_child;	/* parent: who runs on my thread */
+	int vfork_request;			/* parent: clone in progress */
+	long vfork_pid;				/* parent: result for vfork() */
+	int exit_pending, exit_code;		/* child: exit after leaving */
 	/* A host thread has been requested for this task. */
 	int spawned;
 	/*

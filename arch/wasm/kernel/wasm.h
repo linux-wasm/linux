@@ -19,6 +19,16 @@ long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
 
 void wasm_console_init(void);
 
+/* process.c */
+extern struct task_struct *wasm_thread_handoff;
+
+/* binfmt_wasm.c */
+int wasm_user_instantiate(void);
+
+/* vfork.c */
+long wasm_vfork(void);
+long wasm_vfork_leave(void);
+
 /* Absolute host clock time of the next timer event, 0 if none. */
 extern u64 wasm_timer_deadline;
 

@@ -36,13 +36,16 @@
  *
  * The kernel reads the whole file, allocates one anonymous mapping holding
  * the stack followed by the module's data, and asks the host to compile and
- * instantiate the module on the calling task's thread (asm/host.h).
+ * instantiate the module on the thread that will run it (asm/host.h).
+ *
+ * vfork() exists as the system call wasm_vfork (asm/unistd.h): it returns
+ * 0 and the calling thread continues as the child; the child's execve() or
+ * exit() returns the child's pid, in the parent. See vfork.c.
  *
  * execve() from a running program replaces the calling thread's instance;
  * the old program's frames are discarded when the system call returns.
  *
- * FIXME(wasm): fork() and vfork() as such are impossible (see copy_thread),
- * signal handlers are not run, the stack size is fixed and has no guard.
+ * FIXME(wasm): fork() is impossible (see copy_thread), signal handlers are not run, the stack size is fixed and has no guard.
  *
  * The idea of a wasm binfmt comes from tombl/linux and joelseverin/linux;
  * this implementation and its ABI are specific to this port.
@@ -63,6 +66,7 @@
 #include <linux/uaccess.h>
 #include <asm/host.h>
 #include <asm/processor.h>
+#include "wasm.h"
 
 #define WASM_USER_STACK_SIZE	(256 * 1024)
 #define WASM_MAX_IMAGE_SIZE	(64 * 1024 * 1024)
@@ -274,17 +278,42 @@ static int load_wasm_binary(struct linux_binprm *bprm)
 	if (ret)
 		goto out;
 
-	ret = wasm_host_user_exec(image, size, data, dylink.table_size,
-				  mm->start_stack);
-	if (ret)
-		goto out;
-
 	finalize_exec(bprm);
+
+	/*
+	 * The host instantiates the program on the thread that will run it,
+	 * which is not necessarily this one (a vfork child execs on its
+	 * parent's thread), so only record it here.
+	 * FIXME(wasm): the image is leaked if the task dies before it runs.
+	 */
+	kvfree(current->thread.exec_image);
+	current->thread.exec_image = image;
+	current->thread.exec_len = size;
+	current->thread.exec_base = data;
+	current->thread.exec_table = dylink.table_size;
 	current->thread.exec_pending = 1;
 	current->thread.user = 1;
 	current->thread.user_sp = mm->start_stack;
+	return 0;
 out:
 	kvfree(image);
+	return ret;
+}
+
+/*
+ * Have the host compile and instantiate the program recorded by exec, on
+ * the calling thread. An error means the module cannot be compiled or
+ * linked; exec has long succeeded by then, so the caller kills the task.
+ */
+int wasm_user_instantiate(void)
+{
+	struct thread_struct *t = &current->thread;
+	int ret;
+
+	ret = wasm_host_user_exec(t->exec_image, t->exec_len, t->exec_base,
+				  t->exec_table, t->user_sp);
+	kvfree(t->exec_image);
+	t->exec_image = NULL;
 	return ret;
 }
 
