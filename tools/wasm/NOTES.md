@@ -132,6 +132,7 @@ Commit subjects follow Conventional Commits, without co-author trailers.
 - `feat(wasm): add binfmt_wasm and enter user mode`
 - `feat(wasm): add console input`
 - `feat(wasm): support clone and execve from user programs`
+- `feat(wasm): add vfork by lending the child the parent's thread`
 - `feat(wasm/config): enable initramfs, tty and binfmt_wasm in tinyconfig`
 - `fix(wasm): let the kernel know the machine can power off`
 
@@ -166,7 +167,7 @@ Observed, not assumed:
   `binfmt_wasm`, instantiated by the host and entered; argc/argv/envp
   arrive correctly.
 - System calls exercised from user space: `write`, `read`, `getpid`,
-  `uname`, `mmap2`, `munmap`, `clone`, `execve`, `waitid`, `exit`,
+  `uname`, `mmap2`, `munmap`, `clone`, `wasm_vfork`, `execve`, `waitid`, `exit`,
   `reboot`, and an out-of-range number (`-ENOSYS`).
 - Processes: `clone(CLONE_VM | CLONE_VFORK)` with an entry function, the
   child `execve`s a second program with arguments and environment, the
@@ -208,7 +209,8 @@ Observed, not assumed:
 | `asm/ptrace.h` | `user_mode()` is always 0 |
 | `kernel/syscall.c` | signal handlers are never run (signals with a handler are dropped; default actions work), no `rt_sigreturn`, interrupted syscalls return `-EINTR` instead of restarting |
 | `kernel/binfmt_wasm.c` | fixed 256 KiB user stack without a guard; no `brk` |
-| `kernel/process.c` | `fork()` and a `vfork()` that returns twice are impossible: `clone` needs `CLONE_VM`, a stack and an entry function. No ptrace (`-EIO`), no stack traces |
+| `kernel/process.c` | `fork()` is impossible: `clone` needs `CLONE_VM`, a stack and an entry function. No ptrace (`-EIO`), no stack traces |
+| `kernel/vfork.c` | one level only (a vfork child cannot vfork); a loaded program image is leaked if the task dies before running it |
 | `kernel/irq.c` | timer is only polled in idle, `cpu_relax()` and syscall entry; long-running kernel or user code gets no ticks |
 | `kernel/setup.c` | RAM size fixed at boot, no `memory.grow` |
 | `kernel/sections.c` | text/rodata/init/data/bss ranges are empty; init data is never freed; "Memory:" line shows 0K |
@@ -328,9 +330,12 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   of the module (same memory) and starts at the export
   `__clone_entry(stack)`, where `stack` is clone's stack argument.
   `CLONE_VM` and a stack are mandatory. This is the shape of musl's
-  `__clone(fn, stack, ...)` and enough for `posix_spawn` and threads, but
-  `fork()` and a `vfork()` that returns twice cannot exist. Programs that
-  call `vfork()` directly (BusyBox does) will need patching.
+  `__clone(fn, stack, ...)` and enough for `posix_spawn` and threads.
+- `fork()` cannot exist. `vfork()` does, as the system call `wasm_vfork`
+  (244): it returns 0 and the calling thread continues as the child, on
+  the parent's call stack. The child's successful `execve()` or its
+  `exit()` returns the child's pid, and the thread is the parent again.
+  musl wraps this in a `vfork()` macro built on setjmp/longjmp.
 - `execve()` works: the old program's frames are thrown away by the host.
 - `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
   flags.
@@ -340,8 +345,6 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
 - Each kernel task needs its own wasm call stack, so even a uniprocessor
   kernel needs one host thread (Web Worker) per task and shared memory.
   "Single CPU" therefore still requires SharedArrayBuffer and COOP/COEP.
-- BusyBox's shell and init use `vfork()`; with this ABI they need a libc
-  `vfork` built on something like setjmp, or patches to use `posix_spawn`.
 - Signal handlers cannot run yet, which a shell needs for Ctrl-C and
   job control.
 - One Worker per kernel task is heavy (14 for an idle tinyconfig kernel)
