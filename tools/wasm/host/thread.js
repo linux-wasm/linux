@@ -1,5 +1,5 @@
 // Runs one kernel thread: instantiates the kernel module on the shared
-// memory and calls its entry point. Environment independent (browser Worker
+// memory and calls its entry point. Environment independent (a browser Worker
 // or node worker_threads); the glue passes in `post` to talk to the machine.
 //
 // This file implements the import side of arch/wasm/include/asm/host.h.

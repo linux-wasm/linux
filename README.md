@@ -19,13 +19,15 @@ The upstream kernel README is the file [README](README).
 
 ## Quick start
 
-Requirements: docker (or podman), node >= 20, python3.
+Requirements: docker (or podman), node >= 20.
+
+To see it in a browser, use [linux-wasm/distro](https://github.com/linux-wasm/distro),
+which owns the web page and its dev server.
 
 ```sh
 tools/wasm/scripts/build-env.sh              # once: toolchain container (stock LLVM 19)
 tools/wasm/scripts/build.sh                  # -> build/wasm/vmlinux.wasm
 tools/wasm/scripts/test-boot.sh              # headless boot test under node
-tools/wasm/scripts/serve.py                  # http://127.0.0.1:8080/
 ```
 
 ## Where things are
@@ -37,8 +39,8 @@ is upstream Linux.
 |---|---|
 | `arch/wasm/` | The architecture: Kconfig, headers, boot, tasks, interrupts, timers, link glue (`arch/wasm/tools/`) |
 | `tools/wasm/docker/` | Build container (pinned toolchain) |
-| `tools/wasm/scripts/` | `build-env.sh`, `build.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `serve.py` (dev server with COOP/COEP), `sync-upstream.sh` |
-| `tools/wasm/host/` | The JavaScript host: browser page and node runner. The only place that knows about browsers |
+| `tools/wasm/scripts/` | `build-env.sh`, `build.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `sync-upstream.sh` |
+| `tools/wasm/host/` | The JavaScript host, independent of where it runs (`machine.js`, `thread.js`, `input.js`), and a node runner for tests. The browser page lives in linux-wasm/distro |
 | `tools/wasm/tests/` | Test programs (no libc) and the expected boot log |
 | `tools/wasm/NOTES.md` | Port notes: versions, design, stubs, blockers |
 | `.github/workflows/wasm.yml` | CI: build + boot test |

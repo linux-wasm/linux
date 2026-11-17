@@ -28,9 +28,8 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/scripts/build.sh` | The standard build: tinyconfig + test init as initramfs + kernel |
 | `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/{init,hello}.c` to wasm user programs |
 | `tools/wasm/scripts/test-boot.sh` | Headless boot test (node), compares against `tools/wasm/tests/boot-expect.txt` |
-| `tools/wasm/scripts/serve.py` | Dev server with COOP/COEP headers |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
-| `tools/wasm/host/` | JavaScript host: `index.html`, `host.js`, `worker.js` (browser), `node-run.mjs`, `node-worker.mjs` (node), shared `machine.js`, `thread.js`, `input.js` |
+| `tools/wasm/host/` | JavaScript host: `machine.js`, `thread.js`, `input.js` (independent of browser or node) and `node-run.mjs`, `node-worker.mjs` (headless runner). The browser page and dev server are in linux-wasm/distro |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
@@ -82,24 +81,17 @@ clang 20.1.8 but no lld package, hence the container.
 
 ## How to run
 
-Browser:
-
-```sh
-tools/wasm/scripts/serve.py       # http://127.0.0.1:8080/
-```
-
-The server sends `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` and serves
-`build/wasm/vmlinux.wasm` as `/vmlinux.wasm`. Page parameters:
-`?mem=128` (MiB), `?cmdline=...`, `?kernel=url`.
-
-Headless (same machine/thread code, kernel log on stdout):
+Headless, kernel log on stdout:
 
 ```sh
 node tools/wasm/host/node-run.mjs --timeout 20 [--mem 128] [--cmdline "..."]
+                                  [--input "text" --input-after "marker"]
 ```
 
 Exit code 0/2 on halt (2 = panic), 3 on a trap, 124 on timeout.
+
+In a browser: linux-wasm/distro (`scripts/serve.mjs`). This repository has
+no web page and no web server; it only keeps the host code that both use.
 
 ## Patch series (`wasm-port` on top of `v7.3.4`)
 
@@ -299,13 +291,13 @@ opaque values. Timers need no host call: the idle task sleeps with
 JavaScript side (`tools/wasm/host/`), no kernel knowledge beyond the list above:
 
 - `thread.js` implements the imports and runs one kernel thread; used
-  unchanged by the browser Worker (`worker.js`) and node (`node-worker.mjs`).
+  unchanged by node (`node-worker.mjs`) and by the browser Worker in distro.
 - `machine.js` owns the shared memory and the threads. Kernel threads block
   in atomic waits and can never service messages, so console output and
   thread creation are relayed to a thread that does not block (the browser
   main thread). Console chunks carry a shared sequence number so output
   from different workers is shown in the order the kernel wrote it.
-- `host.js`/`index.html` are the page; `node-run.mjs` the headless runner.
+- `node-run.mjs` is the headless runner; the page is in distro (`site/`).
 - A thread that traps or returns from its entry point is reported as a
   `[host]` error line; that is always a kernel or host bug.
 
