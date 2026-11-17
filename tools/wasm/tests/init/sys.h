@@ -18,6 +18,7 @@
 #define __NR_clone	220
 #define __NR_execve	221
 #define __NR_mmap2	222
+#define __NR_wasm_vfork	244
 
 #define ENOSYS		38
 

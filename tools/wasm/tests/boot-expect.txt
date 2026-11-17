@@ -17,6 +17,10 @@ init: bad syscall number returns -ENOSYS
 , exec /hello
 , argc 3, argv /hello from init, env TEST=1
  exited with status 42
+# wasm_vfork: the child borrows init's thread and gives it back on exit.
+vfork child: has its own pid
+init: back in the parent, exit returned the child's pid
+init: vfork child exited with status 9
 # Console input, sent by test-boot.sh when the prompt appears.
 init: type a line:
 init: read 20 bytes: console input works

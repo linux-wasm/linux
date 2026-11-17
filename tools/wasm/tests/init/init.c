@@ -8,6 +8,7 @@
  *   - being loaded from the initramfs and entered, with argc/argv
  *   - simple system calls, and an invalid one
  *   - mmap, clone with an entry function, execve in the child, waitid
+ *   - wasm_vfork: a child on the parent's thread
  *   - reading a line from the console
  *   - powering the machine off
  *
@@ -100,6 +101,43 @@ static void test_clone_exec(void)
 	sys3(__NR_munmap, stack, CHILD_STACK_SIZE, 0);
 }
 
+/*
+ * wasm_vfork: the system call returns 0 and this thread is the child. When
+ * the child exits (or execs), that system call returns the child's pid and
+ * the thread is the parent again. A libc hides this behind setjmp/longjmp;
+ * here the code just carries on.
+ */
+static void test_vfork(void)
+{
+	int info[32] = { 0 };
+	long self = sys0(__NR_getpid);
+	long pid, child;
+
+	pid = sys0(__NR_wasm_vfork);
+	if (pid != 0) {
+		puts("init: wasm_vfork failed: ");
+		putnum(pid);
+		puts("\n");
+		return;
+	}
+	child = sys0(__NR_getpid);
+	puts(child != self ? "vfork child: has its own pid\n"
+			   : "vfork child: still has the parent's pid\n");
+
+	pid = sys1(__NR_exit, 9);
+	puts(pid == child && sys0(__NR_getpid) == self ?
+	     "init: back in the parent, exit returned the child's pid\n" :
+	     "init: unexpected state after the vfork child exited\n");
+
+	if (sys4(__NR_waitid, P_PID, pid, info, WEXITED) < 0)
+		puts("init: waitid for the vfork child failed\n");
+	else {
+		puts("init: vfork child exited with status ");
+		putnum(info[5]);
+		puts("\n");
+	}
+}
+
 static void test_console_input(void)
 {
 	char line[64];
@@ -150,6 +188,7 @@ void _start(long *sp)
 	     "init: bad syscall number: unexpected result\n");
 
 	test_clone_exec();
+	test_vfork();
 	test_console_input();
 
 	puts("init: powering off\n");
