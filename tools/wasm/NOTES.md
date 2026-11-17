@@ -8,8 +8,8 @@ another program, wait for it, and read what is typed on the console.
 
 The programs doing this are libc-free tests (`tools/wasm/tests/init/`).
 With musl (linux-wasm/musl) and unpatched BusyBox, linux-wasm/distro boots
-this kernel to an interactive hush shell; the kernel's own tests do not
-depend on either. Signal handlers do not run yet, so there is no Ctrl-C.
+this kernel to an interactive hush shell with Ctrl-C and job control; the
+kernel's own tests do not depend on either.
 
 Everything shown in the page's `<pre>` is real output of the kernel or of
 user programs, except lines starting with `[host]`, which the JavaScript
@@ -85,7 +85,7 @@ Headless, kernel log on stdout:
 
 ```sh
 node tools/wasm/host/node-run.mjs --timeout 20 [--mem 128] [--cmdline "..."]
-                                  [--input "text" --input-after "marker"]
+                                  [--input "text" --input-after "marker"]...
 ```
 
 Exit code 0/2 on halt (2 = panic), 3 on a trap, 124 on timeout.
@@ -125,6 +125,7 @@ Commit subjects follow Conventional Commits, without co-author trailers.
 - `feat(wasm): add console input`
 - `feat(wasm): support clone and execve from user programs`
 - `feat(wasm): add vfork by lending the child the parent's thread`
+- `feat(wasm): run signal handlers and restart system calls`
 - `feat(wasm/config): enable initramfs, tty and binfmt_wasm in tinyconfig`
 - `fix(wasm): let the kernel know the machine can power off`
 
@@ -160,31 +161,47 @@ Observed, not assumed:
   arrive correctly.
 - System calls exercised from user space: `write`, `read`, `getpid`,
   `uname`, `mmap2`, `munmap`, `clone`, `wasm_vfork`, `execve`, `waitid`, `exit`,
-  `reboot`, and an out-of-range number (`-ENOSYS`).
+  `kill`, `rt_sigaction`, `rt_sigprocmask`, `reboot`, and an out-of-range
+  number (`-ENOSYS`).
 - Processes: `clone(CLONE_VM | CLONE_VFORK)` with an entry function, the
   child `execve`s a second program with arguments and environment, the
   parent sees its exit status with `waitid`.
+- Signal handlers: a handler installed with `rt_sigaction` runs before the
+  `kill` that sent the signal returns, makes system calls of its own, and
+  gets siginfo and a context; the signal is blocked meanwhile and the mask
+  is restored afterwards; a blocked signal is delivered when unblocked.
+  Covered from linux-wasm/distro only (`/bin/selftest`, Ctrl-C and Ctrl-Z
+  in the shell): system call restart with and without `SA_RESTART`,
+  restart after a stop (`sleep 2`, Ctrl-Z, `fg`), `longjmp` out of a handler, `SIGCHLD`,
+  killing a child, the tty's interrupt and suspend characters.
 - Console input: bytes typed in the page (or passed to `node-run.mjs
   --input`) reach a `read()` on `/dev/console`, with tty echo and
   backspace editing.
-- The boot test passed 6 of 6 times under node; the same sequence,
-  including typing with key events, was checked in headless Chromium.
+- The boot test passes under node. Typing with key events, including
+  Ctrl-C, was checked in headless Chromium 147 with the distro's page.
 
 ## What is not exercised or known to be off
 
 - **Only about a dozen system calls have ever been called from user
   space** (listed above). The rest of the table links but is untested,
-  including everything with 64-bit arguments, file I/O, pipes and signals.
+  including everything with 64-bit arguments, file I/O and pipes.
 - The kernel's own tests do not cover threads or files. Those are covered
   from linux-wasm/distro (`/bin/selftest`, built with musl): pthreads with
   a mutex and join, files with 64-bit offsets, pipes, `nanosleep`, wall
-  clock. Several processes running at once has not been tried.
+  clock, signals. A shell with a stopped or background job is as far as
+  several processes at once have been tried.
+- Signals in a multi-threaded process (which thread a handler runs on,
+  `pthread_kill`) and a handler that calls `vfork` or `execve` have not
+  been tried. The kernel's own boot test has no case for a handler that
+  leaves with an exception; that path is only tested from distro.
 - **Boot stalls.** There are gaps of 0.3-1.3 s in the log (before the
   "Memory:" line and before "clocksource: Switched") that vary between
   runs and hosts. Not investigated; most likely something waiting for timer
   ticks, which are only polled in idle, `cpu_relax()` and syscall entry.
 - A user program that loops without making system calls freezes the whole
-  machine: nothing can interrupt running wasm code.
+  machine: nothing can interrupt running wasm code. It cannot be signalled
+  either, not even with SIGKILL: signals are acted upon when a system call
+  returns.
 - Only Chromium and node were tried. Firefox and Safari are untested.
   (The public page https://linux-wasm.github.io/distro/ was checked with
   headless Chromium 147 only.)
@@ -199,7 +216,7 @@ Observed, not assumed:
 |---|---|
 | `asm/compiler.h`, `asm/linkage.h` | `__builtin_return_address()`, `_RET_IP_`, `_THIS_IP_` are always 0: nothing can name its caller |
 | `asm/ptrace.h` | `user_mode()` is always 0 |
-| `kernel/syscall.c` | signal handlers are never run (signals with a handler are dropped; default actions work), no `rt_sigreturn`, interrupted syscalls return `-EINTR` instead of restarting |
+| `kernel/signal.c` | signals are only delivered when a system call returns; no alternate signal stack (`SA_ONSTACK` is ignored); `rt_sigreturn` is `-ENOSYS` because handlers return by returning; signals for a vfork child wait until it has left its parent's thread |
 | `kernel/binfmt_wasm.c` | fixed 256 KiB user stack without a guard; no `brk` |
 | `kernel/process.c` | `fork()` is impossible: `clone` needs `CLONE_VM`, a stack and an entry function. No ptrace (`-EIO`), no stack traces |
 | `kernel/vfork.c` | one level only (a vfork child cannot vfork); a loaded program image is leaked if the task dies before running it |
@@ -277,7 +294,8 @@ Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
 `get_cmdline(ptr, len) -> len`, `console_read(ptr, len) -> n`,
 `user_exec(image, len, memory_base, table_size, sp) -> errno`,
-`user_clone(task)`, `user_run(arg, entry) -> unwound`, `user_unwind()`;
+`user_clone(task)`, `user_run(arg, entry) -> unwound`, `user_unwind()`,
+`user_signal(handler, sig, info, uc) -> how it ended`, `user_rethrow()`;
 plus `env.memory` (shared). Interrupt 1 is console input.
 Exports: `_start()`, `wasm_thread_entry(task, sp)`, `wasm_raise_irq(irq)`,
 `wasm_syscall(nr, a0..a5)`.
@@ -329,6 +347,17 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   `exit()` returns the child's pid, and the thread is the parent again.
   musl wraps this in a `vfork()` macro built on setjmp/longjmp.
 - `execve()` works: the old program's frames are thrown away by the host.
+- Signal handlers are called by the kernel (through the host and the
+  program's function table) when a system call of the program is about to
+  return, nested on the program's own stack. A handler returns normally;
+  there is no `sa_restorer` and no sigreturn. If it leaves with `longjmp`
+  (a wasm exception), the host holds the exception until the kernel has
+  left the system call and throws it again at the system call's call site.
+  The `ucontext` is the asm-generic one; its machine context is the
+  interrupted system call (number, arguments, result), and a changed
+  `uc_sigmask` takes effect when the handler returns.
+- The host places a program's functions at table index 2 and up, so no
+  function has the address of `SIG_DFL` (0) or `SIG_IGN` (1).
 - `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
   flags.
 
@@ -337,8 +366,9 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
 - Each kernel task needs its own wasm call stack, so even a uniprocessor
   kernel needs one host thread (Web Worker) per task and shared memory.
   "Single CPU" therefore still requires SharedArrayBuffer and COOP/COEP.
-- Signal handlers cannot run yet, which a shell needs for Ctrl-C and
-  job control.
+- Signals depend on the program making system calls. A real fix needs a
+  way to interrupt running wasm code, which engines do not offer; the
+  alternative is compiler-inserted polling in user programs.
 - One Worker per kernel task is heavy (14 for an idle tinyconfig kernel)
   and browsers cap the number of workers; a busy user space will hit that.
 - Without preemption or timer polling in running code, a kernel loop that

@@ -9,7 +9,8 @@ node.
 
 **Status: early bring-up.** The kernel boots, loads a WebAssembly `/init`
 from its initramfs and runs it in user mode. Programs can make system
-calls, `clone` and `execve` other programs, and read console input. The
+calls, `clone` and `execve` other programs, handle signals, and read
+console input. The
 kernel's own tests are small programs without libc; linux-wasm/distro
 boots it to a BusyBox shell. See
 [tools/wasm/NOTES.md](tools/wasm/NOTES.md) for exactly what works, what is
@@ -55,7 +56,7 @@ user programs in
 | Repository | Role |
 |---|---|
 | [linux-wasm/linux](https://github.com/linux-wasm/linux) | This one: the kernel |
-| [linux-wasm/musl](https://github.com/linux-wasm/musl) | C library for user space (port not started) |
+| [linux-wasm/musl](https://github.com/linux-wasm/musl) | C library for user space |
 | [linux-wasm/distro](https://github.com/linux-wasm/distro) | Builds kernel + user space into something bootable; pins a commit of this repository |
 
 User space (musl, BusyBox, initramfs) is deliberately kept out of this tree.
