@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         bc \
         binutils \
         bison \
+        bzip2 \
         ca-certificates \
         clang-19 \
         cpio \
