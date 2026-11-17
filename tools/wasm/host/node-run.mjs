@@ -4,10 +4,12 @@
 //
 //   node tools/wasm/host/node-run.mjs [--kernel build/wasm/vmlinux.wasm]
 //        [--mem 128] [--cmdline "..."] [--timeout seconds]
-//        [--input "text" [--input-after "marker"]]
+//        [--input "text" [--input-after "marker"]]...
 //
-// --input sends console input (\n is a newline) once the output contains
-// the --input-after marker, or right away without one. stdin is not
+// --input sends console input (\n is a newline, \xHH the byte HH) once the
+// output contains the --input-after marker, or right away without one.
+// Both can be repeated: the n-th input waits for the n-th marker to show
+// up in what was printed after the previous input was sent. stdin is not
 // forwarded.
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -26,8 +28,8 @@ const { values: args } = parseArgs({
     mem: { type: "string", default: "128" },
     cmdline: { type: "string", default: "" },
     timeout: { type: "string", default: "0" },
-    input: { type: "string" },
-    "input-after": { type: "string", default: "" },
+    input: { type: "string", multiple: true, default: [] },
+    "input-after": { type: "string", multiple: true, default: [] },
   },
 });
 
@@ -39,7 +41,12 @@ const finish = (code) => {
   setTimeout(() => process.exit(code), 50);
 };
 
-let pendingInput = args.input?.replaceAll("\\n", "\n") ?? null;
+const pendingInputs = args.input.map((text, i) => ({
+  text: text
+    .replaceAll("\\n", "\n")
+    .replace(/\\x([0-9a-f]{2})/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16))),
+  after: args["input-after"][i] ?? "",
+}));
 let seen = "";
 
 const machine = new Machine({
@@ -60,11 +67,10 @@ const machine = new Machine({
   },
   onConsole(text) {
     process.stdout.write(text);
-    if (pendingInput === null) return;
     seen += text;
-    if (seen.includes(args["input-after"])) {
-      machine.input(pendingInput);
-      pendingInput = null;
+    while (pendingInputs.length && seen.includes(pendingInputs[0].after)) {
+      machine.input(pendingInputs.shift().text);
+      seen = "";
     }
   },
   onEvent(event) {
