@@ -7,9 +7,9 @@ User programs can make system calls, create a child with `clone`, `execve`
 another program, wait for it, and read what is typed on the console.
 
 The programs doing this are libc-free tests (`tools/wasm/tests/init/`).
-A musl port exists in linux-wasm/musl and C programs built with it run
-(`printf`, `malloc`, `posix_spawn`); the kernel's own tests do not depend on
-it. There is no shell yet, and signal handlers do not run.
+With musl (linux-wasm/musl) and unpatched BusyBox, linux-wasm/distro boots
+this kernel to an interactive hush shell; the kernel's own tests do not
+depend on either. Signal handlers do not run yet, so there is no Ctrl-C.
 
 Everything shown in the page's `<pre>` is real output of the kernel or of
 user programs, except lines starting with `[host]`, which the JavaScript
