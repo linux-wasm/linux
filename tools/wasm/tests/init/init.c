@@ -9,6 +9,7 @@
  *   - simple system calls, and an invalid one
  *   - mmap, clone with an entry function, execve in the child, waitid
  *   - wasm_vfork: a child on the parent's thread
+ *   - signal handlers
  *   - reading a line from the console
  *   - powering the machine off
  *
@@ -138,6 +139,69 @@ static void test_vfork(void)
 	}
 }
 
+/*
+ * Signal handlers. The kernel calls the handler when a system call is about
+ * to return: here, the kill() that sent the signal. The handler makes
+ * system calls of its own before the interrupted one returns.
+ */
+struct sigaction {
+	void (*handler)(int, int *, void *);
+	unsigned long flags;
+	unsigned long mask[2];
+};
+
+static int handled, handled_signo, handled_blocked;
+
+static void on_signal(int sig, int *info, void *uc)
+{
+	unsigned long blocked[2] = { 0, 0 };
+
+	handled++;
+	/* siginfo_t starts with si_signo. */
+	handled_signo = uc ? info[0] : -1;
+	/* The signal is blocked while its handler runs. */
+	sys4(__NR_rt_sigprocmask, SIG_BLOCK, 0, blocked, 8);
+	handled_blocked = (blocked[0] >> (sig - 1)) & 1;
+	puts("handler: signal ");
+	putnum(sig);
+	puts(" in pid ");
+	putnum(sys0(__NR_getpid));
+	puts("\n");
+}
+
+static void test_signals(void)
+{
+	struct sigaction sa = { on_signal, SA_SIGINFO, { 0, 0 } };
+	unsigned long usr2[2] = { 1UL << (SIGUSR2 - 1), 0 };
+	unsigned long blocked[2] = { 0, 0 };
+	long self = sys0(__NR_getpid);
+	long ret;
+
+	if (sys4(__NR_rt_sigaction, SIGUSR1, &sa, 0, 8) ||
+	    sys4(__NR_rt_sigaction, SIGUSR2, &sa, 0, 8)) {
+		puts("init: rt_sigaction failed\n");
+		return;
+	}
+
+	/* The handler's own system calls must not leak into this result. */
+	ret = sys3(__NR_kill, self, SIGUSR1, 0);
+	sys4(__NR_rt_sigprocmask, SIG_BLOCK, 0, blocked, 8);
+	puts(ret == 0 && handled == 1 && handled_signo == SIGUSR1 &&
+	     handled_blocked && !(blocked[0] & (1UL << (SIGUSR1 - 1))) ?
+	     "init: handler ran before kill returned 0, mask restored\n" :
+	     "init: signal handler: unexpected state\n");
+
+	/* A blocked signal waits; unblocking it runs the handler. */
+	sys4(__NR_rt_sigprocmask, SIG_BLOCK, usr2, 0, 8);
+	sys3(__NR_kill, self, SIGUSR2, 0);
+	puts(handled == 1 ? "init: blocked signal is pending\n" :
+			    "init: blocked signal was delivered\n");
+	sys4(__NR_rt_sigprocmask, SIG_UNBLOCK, usr2, 0, 8);
+	puts(handled == 2 && handled_signo == SIGUSR2 ?
+	     "init: handler ran when the signal was unblocked\n" :
+	     "init: unblocked signal: handler did not run\n");
+}
+
 static void test_console_input(void)
 {
 	char line[64];
@@ -189,6 +253,7 @@ void _start(long *sp)
 
 	test_clone_exec();
 	test_vfork();
+	test_signals();
 	test_console_input();
 
 	puts("init: powering off\n");

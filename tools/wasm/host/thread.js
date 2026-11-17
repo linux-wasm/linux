@@ -12,6 +12,13 @@ const USER_UNWIND = Symbol("user_unwind");
 
 const ENOEXEC = 8;
 const USER_CLONE = 1; // enum wasm_user_entry
+// enum wasm_signal
+const SIGNAL_RETURNED = 0;
+const SIGNAL_THREW = 1;
+const SIGNAL_NOT_CALLABLE = 2;
+// Function addresses of a program start here: 0 must trap as a null
+// pointer, and 0 and 1 are SIG_DFL and SIG_IGN, not handlers.
+const TABLE_BASE = 2;
 
 export function runThread(init, post) {
   const { module, memory, seq, cmdline, entry } = init;
@@ -25,30 +32,36 @@ export function runThread(init, post) {
   let instance; // the kernel, for this thread
 
   // The user program of this thread: { program, memoryBase, tableSize,
-  // instance }. A thread created by clone() starts with the parent's
+  // instance, table }. A thread created by clone() starts with the parent's
   // program and no instance; user_run creates it.
-  let user = init.userProgram ? { ...init.userProgram, instance: null } : null;
+  let user = init.userProgram
+    ? { ...init.userProgram, instance: null, table: null }
+    : null;
 
+  // An exception with which a signal handler ended, between user_signal
+  // and user_rethrow.
+  let thrown = null;
+
+  // Returns { instance, table }.
   function instantiateUser(program, memoryBase, tableSize, sp) {
     const i32 = (value, mutable = false) =>
       new WebAssembly.Global({ value: "i32", mutable }, value);
-    // Slot 0 stays empty so that a null function pointer traps.
     const table = new WebAssembly.Table({
-      initial: (tableSize >>> 0) + 1,
+      initial: (tableSize >>> 0) + TABLE_BASE,
       element: "anyfunc",
     });
     const userInstance = new WebAssembly.Instance(program, {
       env: {
         memory,
         __memory_base: i32(memoryBase),
-        __table_base: i32(1),
+        __table_base: i32(TABLE_BASE),
         __stack_pointer: i32(sp, true),
         __indirect_function_table: table,
       },
       linux: { syscall: instance.exports.wasm_syscall },
     });
     userInstance.exports.__wasm_apply_data_relocs?.();
-    return userInstance;
+    return { instance: userInstance, table };
   }
 
   const host = {
@@ -105,7 +118,7 @@ export function runThread(init, post) {
           program,
           memoryBase,
           tableSize,
-          instance: instantiateUser(program, memoryBase, tableSize, sp),
+          ...instantiateUser(program, memoryBase, tableSize, sp),
         };
         return 0;
       } catch (e) {
@@ -122,11 +135,9 @@ export function runThread(init, post) {
     user_run(arg, entryKind) {
       try {
         if (entryKind === USER_CLONE) {
-          user.instance = instantiateUser(
-            user.program,
-            user.memoryBase,
-            user.tableSize,
-            arg,
+          Object.assign(
+            user,
+            instantiateUser(user.program, user.memoryBase, user.tableSize, arg),
           );
           user.instance.exports.__clone_entry(arg);
         } else {
@@ -141,6 +152,31 @@ export function runThread(init, post) {
 
     user_unwind() {
       throw USER_UNWIND;
+    },
+
+    // Signal handlers (see arch/wasm/kernel/signal.c). The handler is a
+    // function address of the program, i.e. an index into its table. JS
+    // drops the arguments a one-parameter handler does not declare.
+    user_signal(handler, sig, info, uc) {
+      const index = handler >>> 0;
+      const fn = index < user.table.length ? user.table.get(index) : null;
+      if (!fn) return SIGNAL_NOT_CALLABLE;
+      try {
+        fn(sig, info, uc);
+        return SIGNAL_RETURNED;
+      } catch (e) {
+        // longjmp() out of the handler. Anything else (a trap, or our own
+        // unwinding for exec and thread exit) is not the kernel's to handle.
+        if (!(e instanceof WebAssembly.Exception)) throw e;
+        thrown = e;
+        return SIGNAL_THREW;
+      }
+    },
+
+    user_rethrow() {
+      const e = thrown;
+      thrown = null;
+      throw e;
     },
   };
 

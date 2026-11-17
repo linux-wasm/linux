@@ -36,6 +36,11 @@ struct thread_struct {
 	int vfork_request;			/* parent: clone in progress */
 	long vfork_pid;				/* parent: result for vfork() */
 	int exit_pending, exit_code;		/* child: exit after leaving */
+	/*
+	 * A signal handler left by throwing an exception (longjmp), which
+	 * the host is holding; see signal.c.
+	 */
+	int user_thrown;
 	/* A host thread has been requested for this task. */
 	int spawned;
 	/*

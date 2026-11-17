@@ -21,6 +21,13 @@ init: bad syscall number returns -ENOSYS
 vfork child: has its own pid
 init: back in the parent, exit returned the child's pid
 init: vfork child exited with status 9
+# Signal handlers, called by the kernel from inside kill() and
+# rt_sigprocmask().
+handler: signal 10 in pid 1
+init: handler ran before kill returned 0, mask restored
+init: blocked signal is pending
+handler: signal 12 in pid 1
+init: handler ran when the signal was unblocked
 # Console input, sent by test-boot.sh when the prompt appears.
 init: type a line:
 init: read 20 bytes: console input works

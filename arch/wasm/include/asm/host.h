@@ -53,6 +53,19 @@
  *   user_unwind()             Abandon the running program: unwind the host
  *                             stack up to the user_run call that entered
  *                             it and make that return 1. Does not return.
+ *   user_signal(handler, sig, Call entry `handler` of the function table
+ *               info, uc)     of the thread's program with the arguments
+ *     -> i32                  (sig, info, uc); a handler declared with
+ *                             fewer parameters gets the leading ones. The
+ *                             result is an enum wasm_signal: RETURNED if
+ *                             the handler returned, THREW if it ended with
+ *                             a wasm exception, which the host keeps for
+ *                             user_rethrow, NOT_CALLABLE if the table has
+ *                             no function there. Called from inside a
+ *                             system call of the program; user_unwind
+ *                             passes through it.
+ *   user_rethrow()            Throw the exception kept by the last
+ *                             user_signal. Does not return.
  *
  * Exports, called by the host:
  *
@@ -127,6 +140,15 @@ int wasm_host_user_run(unsigned long arg, int entry);
 
 __wasm_host(user_unwind)
 void __noreturn wasm_host_user_unwind(void);
+
+enum wasm_signal {
+	WASM_SIGNAL_RETURNED = 0,
+	WASM_SIGNAL_THREW = 1,
+	WASM_SIGNAL_NOT_CALLABLE = 2,
+};
+
+__wasm_host(user_signal)
+int wasm_host_user_signal(unsigned long handler, int sig, void *info, void *uc);
 
 #endif /* __ASSEMBLY__ */
 #endif

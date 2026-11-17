@@ -11,6 +11,9 @@
 #define __NR_write	64
 #define __NR_exit	93
 #define __NR_waitid	95
+#define __NR_kill	129
+#define __NR_rt_sigaction	134
+#define __NR_rt_sigprocmask	135
 #define __NR_reboot	142
 #define __NR_uname	160
 #define __NR_getpid	172
@@ -27,7 +30,12 @@
 #define MAP_PRIVATE	0x02
 #define MAP_ANONYMOUS	0x20
 
+#define SIGUSR1		10
+#define SIGUSR2		12
 #define SIGCHLD		17
+#define SA_SIGINFO	4
+#define SIG_BLOCK	0
+#define SIG_UNBLOCK	1
 #define P_PID		1
 #define WEXITED		4
 #define CLD_EXITED	1

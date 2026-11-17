@@ -13,10 +13,8 @@
 #include <linux/linkage.h>
 #include <linux/mman.h>
 #include <linux/ptrace.h>
-#include <linux/resume_user_mode.h>
 #include <linux/sched.h>
 #include <linux/sched/task_stack.h>
-#include <linux/signal.h>
 #include <linux/syscalls.h>
 #include <asm/host.h>
 #include <asm/processor.h>
@@ -57,60 +55,12 @@ SYSCALL_DEFINE6(mmap2, unsigned long, addr, unsigned long, len,
 			       pgoff >> (PAGE_SHIFT - 12));
 }
 
-/* FIXME(wasm): signal handlers are never run, so nothing returns from one. */
-SYSCALL_DEFINE0(rt_sigreturn)
-{
-	return -ENOSYS;
-}
-
 /*
- * Work to do before going back to the user program.
- *
- * FIXME(wasm): signals with a handler are dequeued and dropped: there is no
- * way yet to call into the program at an arbitrary point. Signals whose
- * action is the default (terminate, stop, ...) are handled by get_signal().
- * Interrupted system calls are not restarted.
+ * The C part of the system call entry; wasm_syscall itself is in entry.S.
  */
-static void wasm_exit_to_user_mode(struct pt_regs *regs)
-{
-	unsigned long flags;
-
-	unsigned long work = _TIF_NEED_RESCHED | _TIF_NOTIFY_RESUME;
-
-	/*
-	 * A vfork child on its parent's thread must not be killed there
-	 * (vfork.c); its signals wait until it has a thread of its own.
-	 */
-	if (!current->thread.vfork_parent)
-		work |= _TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL;
-
-	while ((flags = read_thread_flags()) & work) {
-		if (flags & _TIF_NEED_RESCHED)
-			schedule();
-
-		if (flags & work & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL)) {
-			struct ksignal ksig;
-
-			get_signal(&ksig);
-			restore_saved_sigmask();
-		}
-
-		if (flags & _TIF_NOTIFY_RESUME)
-			resume_user_mode_work(regs);
-	}
-
-	switch (regs->syscall_ret) {
-	case -ERESTARTSYS:
-	case -ERESTARTNOINTR:
-	case -ERESTARTNOHAND:
-	case -ERESTART_RESTARTBLOCK:
-		regs->syscall_ret = -EINTR;
-	}
-}
-
-long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
-		  unsigned long a2, unsigned long a3, unsigned long a4,
-		  unsigned long a5)
+long wasm_do_syscall(long nr, unsigned long a0, unsigned long a1,
+		     unsigned long a2, unsigned long a3, unsigned long a4,
+		     unsigned long a5)
 {
 	struct pt_regs *regs = task_pt_regs(current);
 
@@ -128,29 +78,33 @@ long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
 	regs->syscall_args[4] = a4;
 	regs->syscall_args[5] = a5;
 
-	if (nr == __NR_wasm_vfork) {
-		/* Returns as the child, with the child's pt_regs. */
-		long ret = wasm_vfork();
+	/* More than once if a signal interrupts the call and it restarts. */
+	do {
+		nr = regs->syscall_nr;
 
-		regs = task_pt_regs(current);
-		regs->syscall_ret = ret;
-	} else if (current->thread.vfork_parent &&
-		   (nr == __NR_exit || nr == __NR_exit_group)) {
-		/* Exit on a thread of its own, not on the parent's. */
-		current->thread.exit_pending = 1;
-		current->thread.exit_code = a0;
-		return wasm_vfork_leave();
-	} else if ((unsigned long)nr < NR_syscalls) {
-		regs->syscall_ret = sys_call_table[nr](regs);
-	} else {
-		regs->syscall_ret = -ENOSYS;
-	}
+		if (nr == __NR_wasm_vfork) {
+			/* Returns as the child, with the child's pt_regs. */
+			long ret = wasm_vfork();
 
-	/* A vfork child that exec'd: hand the thread back to the parent. */
-	if (current->thread.vfork_parent && current->thread.exec_pending)
-		return wasm_vfork_leave();
+			regs = task_pt_regs(current);
+			regs->syscall_nr = nr;
+			regs->syscall_ret = ret;
+		} else if (current->thread.vfork_parent &&
+			   (nr == __NR_exit || nr == __NR_exit_group)) {
+			/* Exit on a thread of its own, not on the parent's. */
+			current->thread.exit_pending = 1;
+			current->thread.exit_code = regs->syscall_args[0];
+			return wasm_vfork_leave();
+		} else if ((unsigned long)nr < NR_syscalls) {
+			regs->syscall_ret = sys_call_table[nr](regs);
+		} else {
+			regs->syscall_ret = -ENOSYS;
+		}
 
-	wasm_exit_to_user_mode(regs);
+		/* A vfork child that exec'd: hand the thread back to the parent. */
+		if (current->thread.vfork_parent && current->thread.exec_pending)
+			return wasm_vfork_leave();
+	} while (wasm_exit_to_user_mode(regs));
 
 	/*
 	 * After a successful execve the calling program no longer exists as

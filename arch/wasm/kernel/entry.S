@@ -15,6 +15,13 @@ __wasm_current:
 
 	.functype	wasm_start_kernel () -> ()
 	.functype	wasm_thread_start (i32) -> ()
+	.functype	wasm_do_syscall (i32, i32, i32, i32, i32, i32, i32) -> (i32)
+	.functype	wasm_user_thrown () -> (i32)
+
+	/* host.user_rethrow, see asm/host.h. */
+	.functype	wasm_host_user_rethrow () -> ()
+	.import_module	wasm_host_user_rethrow, host
+	.import_name	wasm_host_user_rethrow, user_rethrow
 
 /*
  * void _start(void) - boot the kernel on the calling host thread.
@@ -47,4 +54,34 @@ wasm_thread_entry:
 	global.set	__wasm_current
 	local.get	0
 	call		wasm_thread_start
+	end_function
+
+/*
+ * long wasm_syscall(long nr, unsigned long a0, ..., unsigned long a5)
+ * System call entry: what a user program's "linux"."syscall" import is
+ * linked to.
+ *
+ * The work is done in C (wasm_do_syscall, syscall.c). If a signal handler
+ * that ran during the call left by throwing an exception (longjmp), the
+ * host has kept it back so that it would not unwind kernel frames; it is
+ * passed on to the program here, where the only kernel frame left is this
+ * one, which keeps nothing on the kernel stack.
+ */
+	.globl	wasm_syscall
+	.type	wasm_syscall,@function
+wasm_syscall:
+	.functype	wasm_syscall (i32, i32, i32, i32, i32, i32, i32) -> (i32)
+	local.get	0
+	local.get	1
+	local.get	2
+	local.get	3
+	local.get	4
+	local.get	5
+	local.get	6
+	call		wasm_do_syscall
+	call		wasm_user_thrown
+	if
+	call		wasm_host_user_rethrow
+	unreachable
+	end_if
 	end_function

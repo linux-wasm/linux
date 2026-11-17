@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 
-obj-y += console.o entry.o irq.o process.o sections.o setup.o syscall.o time.o vfork.o
+obj-y += console.o entry.o irq.o process.o sections.o setup.o signal.o syscall.o time.o vfork.o
 obj-$(CONFIG_BINFMT_WASM) += binfmt_wasm.o
 obj-$(CONFIG_PROC_FS) += cpuinfo.o
 

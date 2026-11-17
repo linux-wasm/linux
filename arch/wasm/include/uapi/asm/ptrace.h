@@ -7,7 +7,8 @@
 /*
  * A wasm thread has no register file that the kernel can save or restore:
  * locals and the value stack live inside the engine. pt_regs only carries
- * what a (future) syscall entry path needs.
+ * the system call the task is in; it is also what a signal handler finds
+ * as the machine context (struct sigcontext).
  */
 struct pt_regs {
 	long syscall_nr;

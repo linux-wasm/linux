@@ -17,6 +17,11 @@ long wasm_syscall(long nr, unsigned long a0, unsigned long a1,
 		  unsigned long a2, unsigned long a3, unsigned long a4,
 		  unsigned long a5);
 
+/* entry.S -> C: the system call itself. */
+long wasm_do_syscall(long nr, unsigned long a0, unsigned long a1,
+		     unsigned long a2, unsigned long a3, unsigned long a4,
+		     unsigned long a5);
+
 void wasm_console_init(void);
 
 /* process.c */
@@ -24,6 +29,11 @@ extern struct task_struct *wasm_thread_handoff;
 
 /* binfmt_wasm.c */
 int wasm_user_instantiate(void);
+
+/* signal.c */
+struct pt_regs;
+bool wasm_exit_to_user_mode(struct pt_regs *regs);
+int wasm_user_thrown(void);
 
 /* vfork.c */
 long wasm_vfork(void);

@@ -13,6 +13,8 @@
  *  - imports env.memory (shared; declare a maximum of 4 GiB so that it
  *    fits any machine), env.__memory_base, env.__table_base,
  *    env.__indirect_function_table and env.__stack_pointer as needed.
+ *    __table_base is at least 2: function address 0 is the null pointer
+ *    and 0 and 1 are SIG_DFL and SIG_IGN.
  *  - imports linux.syscall, type (i32 nr, i32 x 6) -> i32, the only way
  *    into the kernel. Numbers are the generic 32-bit ones
  *    (asm/unistd_32.h); errors are returned as -errno.
@@ -45,7 +47,14 @@
  * execve() from a running program replaces the calling thread's instance;
  * the old program's frames are discarded when the system call returns.
  *
- * FIXME(wasm): fork() is impossible (see copy_thread), signal handlers are not run, the stack size is fixed and has no guard.
+ * A signal handler is a function address of the program (an index into
+ * its table). The kernel has it called when a system call of the program
+ * is about to return, on top of the program's frames; the handler returns
+ * by returning, or leaves with longjmp(). There is no sigreturn trampoline
+ * and the kernel's struct sigaction has no sa_restorer. See signal.c.
+ *
+ * FIXME(wasm): fork() is impossible (see copy_thread), the stack size is
+ * fixed and has no guard, there is no alternate signal stack.
  *
  * The idea of a wasm binfmt comes from tombl/linux and joelseverin/linux;
  * this implementation and its ABI are specific to this port.
