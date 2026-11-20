@@ -2,6 +2,6 @@
 import { parentPort } from "node:worker_threads";
 import { runThread } from "./thread.js";
 
-parentPort.once("message", (data) =>
+parentPort.on("message", (data) =>
   runThread(data, (msg) => parentPort.postMessage(msg)),
 );

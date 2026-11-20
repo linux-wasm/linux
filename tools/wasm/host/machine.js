@@ -22,17 +22,18 @@ export class Machine {
   #workers = new Map();
   #nextId = 0;
   #nextSeq = 0;
-  #pendingConsole = new Map();
+  #pending = new Map();
   #input = new InputQueue();
   #decoder = new TextDecoder();
   #userPrograms = new Map(); // task -> program for a thread yet to be spawned
   #raiseIrq = null;
   #devices = [];
   #deviceWorkers = [];
+  #spares = [];
   halted = false;
 
   // opts: { module, memoryMiB, cmdline, createWorker(),
-  //         disks, createDeviceWorker(),
+  //         disks, createDeviceWorker(), spareThreads,
   //         onConsole(text) or onConsoleBytes(Uint8Array),
   //         onEvent({type, ...}) }
   // Console output is UTF-8 as far as the kernel is concerned; onConsole
@@ -89,6 +90,7 @@ export class Machine {
     this.halted = true;
     for (const worker of this.#workers.values()) worker.terminate();
     for (const worker of this.#deviceWorkers) worker.terminate();
+    for (const worker of this.#spares) worker.terminate();
     this.#workers.clear();
   }
 
@@ -116,32 +118,57 @@ export class Machine {
     (await this.#raiseIrq)(irq);
   }
 
-  #spawn(entry) {
-    const id = this.#nextId++;
+  // A host thread with the kernel instantiated, waiting to be told which
+  // task to run (see thread.js).
+  #prepare() {
     const worker = this.#opts.createWorker();
-    this.#workers.set(id, worker);
-    worker.onmessage = (msg) => this.#onMessage(id, msg);
-    worker.onerror = (err) =>
-      this.#event({ type: "worker-error", id, message: String(err?.message ?? err) });
     worker.postMessage({
+      type: "prepare",
       module: this.#opts.module,
       memory: this.#memory,
       seq: this.#seq,
       input: this.#input.buffer,
       cmdline: this.#opts.cmdline,
       devices: this.#devices.map((d) => d.device),
+    });
+    return worker;
+  }
+
+  #spawn(entry) {
+    const id = this.#nextId++;
+    const worker = this.#spares.shift() ?? this.#prepare();
+    this.#workers.set(id, worker);
+    worker.onmessage = (msg) => this.#onMessage(id, msg);
+    worker.onerror = (err) =>
+      this.#event({ type: "worker-error", id, message: String(err?.message ?? err) });
+    worker.postMessage({
+      type: "start",
       userProgram: this.#userPrograms.get(entry.task),
       entry,
     });
     this.#userPrograms.delete(entry.task);
     this.#event({ type: "thread-start", id, entry });
+    // The kernel waits for a new task's thread, so have the next ones
+    // ready before it asks.
+    while (this.#spares.length < (this.#opts.spareThreads ?? 4))
+      this.#spares.push(this.#prepare());
   }
 
+  // Messages of different workers may overtake each other; `seq` gives
+  // their true order (see thread.js), and they are handled in it.
   #onMessage(id, msg) {
-    if (this.halted) return;
+    this.#pending.set(msg.seq, { id, msg });
+    while (!this.halted && this.#pending.has(this.#nextSeq)) {
+      const next = this.#pending.get(this.#nextSeq);
+      this.#pending.delete(this.#nextSeq++);
+      this.#handle(next.id, next.msg);
+    }
+  }
+
+  #handle(id, msg) {
     switch (msg.type) {
       case "console":
-        this.#console(msg);
+        this.#emitConsole(msg.bytes);
         break;
       case "spawn":
         this.#spawn({ kind: "thread", task: msg.task, sp: msg.sp });
@@ -151,10 +178,10 @@ export class Machine {
         this.#event({ type: "thread-exit", id });
         break;
       case "halt":
-        this.#flushConsole();
         this.halted = true;
         for (const worker of this.#workers.values()) worker.terminate();
         for (const worker of this.#deviceWorkers) worker.terminate();
+        for (const worker of this.#spares) worker.terminate();
         this.#workers.clear();
         this.#event({ type: "halt", id, reason: HALT_REASONS[msg.reason] ?? msg.reason });
         break;
@@ -167,7 +194,6 @@ export class Machine {
       case "returned":
       case "trap":
         // The kernel never returns from an entry point; either is a bug.
-        this.#flushConsole();
         this.#reap(id);
         this.#event({ ...msg, id });
         break;
@@ -179,27 +205,9 @@ export class Machine {
     this.#workers.delete(id);
   }
 
-  // Console messages come from different workers and may overtake each
-  // other; `seq` gives their true order.
-  #console(msg) {
-    this.#pendingConsole.set(msg.seq, msg.bytes);
-    while (this.#pendingConsole.has(this.#nextSeq)) {
-      this.#emitConsole(this.#pendingConsole.get(this.#nextSeq));
-      this.#pendingConsole.delete(this.#nextSeq++);
-    }
-  }
-
   #emitConsole(bytes) {
     if (this.#opts.onConsoleBytes) this.#opts.onConsoleBytes(bytes);
     else this.#opts.onConsole(this.#decoder.decode(bytes, { stream: true }));
-  }
-
-  // Emit whatever is buffered even if an earlier message never arrived.
-  #flushConsole() {
-    for (const seq of [...this.#pendingConsole.keys()].sort((a, b) => a - b))
-      this.#emitConsole(this.#pendingConsole.get(seq));
-    this.#pendingConsole.clear();
-    this.#nextSeq = Atomics.load(this.#seq, 0);
   }
 
   #event(event) {
