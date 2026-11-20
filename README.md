@@ -41,7 +41,7 @@ is upstream Linux.
 | `arch/wasm/` | The architecture: Kconfig, headers, boot, tasks, interrupts, timers, link glue (`arch/wasm/tools/`) |
 | `tools/wasm/docker/` | Build container (pinned toolchain) |
 | `tools/wasm/scripts/` | `build-env.sh`, `build.sh`, `kmake.sh` (kbuild in the container), `test-boot.sh`, `sync-upstream.sh` |
-| `tools/wasm/host/` | The JavaScript host, independent of where it runs (`machine.js`, `thread.js`, `input.js`, virtio devices in `virtio*.js` and `device.js`), and a node runner for tests. The browser page lives in linux-wasm/distro |
+| `tools/wasm/host/` | The JavaScript host, independent of where it runs (`machine.js`, `thread.js`, `input.js`, virtio devices in `virtio*.js` and `device.js`, the user-mode network in `usernet.js` and `wisp.js`), and a node runner for tests. The browser page lives in linux-wasm/distro |
 | `tools/wasm/tests/` | Test programs (no libc) and the expected boot log |
 | `tools/wasm/NOTES.md` | Port notes: versions, design, stubs, blockers |
 | `.github/workflows/wasm.yml` | CI: build + boot test |

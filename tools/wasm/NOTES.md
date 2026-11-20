@@ -29,7 +29,7 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/{init,hello}.c` to wasm user programs |
 | `tools/wasm/scripts/test-boot.sh` | Headless boot test (node), compares against `tools/wasm/tests/boot-expect.txt` |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
-| `tools/wasm/host/` | JavaScript host: `machine.js`, `thread.js`, `input.js`, `irq.js`, and the virtio devices `virtio.js`, `virtio-blk.js`, `device.js` (independent of browser or node) and `node-run.mjs`, `node-worker.mjs`, `node-device-worker.mjs` (headless runner). The browser page and dev server are in linux-wasm/distro |
+| `tools/wasm/host/` | JavaScript host: `machine.js`, `thread.js`, `input.js`, `irq.js`, the virtio devices `virtio.js`, `virtio-blk.js`, `virtio-net.js`, `device.js`, and the network behind the network card, `usernet.js` and `wisp.js` (independent of browser or node) and `node-run.mjs`, `node-worker.mjs`, `node-device-worker.mjs` (headless runner). The browser page and dev server are in linux-wasm/distro |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
@@ -313,7 +313,7 @@ Defined and documented in `arch/wasm/include/asm/host.h`.
 Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
 `clock_realtime_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
-`get_cmdline(ptr, len) -> len`, `console_read(ptr, len) -> n`,
+`get_cmdline(ptr, len) -> len`, `random(ptr, len)`, `console_read(ptr, len) -> n`,
 `console_size() -> rows << 16 | columns`,
 `virtio_probe`, `virtio_config_read`, `virtio_set_features`,
 `virtio_set_status`, `virtio_queue`, `virtio_notify` (devices, below),
@@ -403,6 +403,46 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   function has the address of `SIG_DFL` (0) or `SIG_IGN` (1).
 - `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
   flags.
+
+## Networking
+
+The kernel has its own TCP/IP (`CONFIG_NET`, `CONFIG_INET`) and a virtio
+network card (`CONFIG_VIRTIO_NET`, `virtio-net.js`). What is on the other
+end of the card is not a network but `usernet.js`, a user-mode network in
+the host, in the manner of QEMU's: it answers ARP for every address and
+pings to the gateway (10.0.2.2), and is the remote end of every TCP
+connection and UDP exchange the kernel starts. The payload goes through
+one WebSocket to a Wisp proxy (`wisp.js`; the server is
+linux-wasm/netproxy), which opens the real sockets. The reason for the
+detour is that a page can only open WebSockets.
+
+- The link between kernel and `usernet.js` never loses or reorders a
+  frame (`virtio-net.js` queues frames while the kernel has no receive
+  buffer free), so its TCP has sequence numbers, windows and the
+  handshakes, and no retransmission or congestion control.
+- The network device's thread waits with `Atomics.waitAsync`, because it
+  has events of its own (the WebSocket); a disk's thread still blocks.
+- `node-run.mjs --net ws://host:port/ [--dns host[:port]]`, `--net none`
+  for a card with nothing behind the gateway.
+- Entropy: `asm/archrandom.h` takes random numbers from the host
+  (`random` import, `crypto.getRandomValues`). Without it the first
+  reader of `/dev/urandom` hung: the kernel's fallback measures timer
+  jitter in a loop, and no timer interrupt arrives in a loop.
+
+Observed (linux-wasm/distro's network test, node 22, and by hand in
+Chromium): ping to the gateway; HTTP over TCP in both directions with a
+300 kB body arriving intact; a name resolved over UDP; a refused port;
+bash's `/dev/tcp`; HTTPS to a public site with BusyBox wget (which does
+not verify certificates); the same against wisp-js 0.5.3 as the proxy.
+Not tried: many connections at once, large uploads (the path that closes
+the window), UDP other than DNS, unix sockets (`CONFIG_UNIX` is on).
+Known gaps are in the FIXME at the top of `usernet.js`: a refused
+connection is a reset after `connect()` succeeded, there is no half-close,
+no IPv6, and nothing can connect from outside.
+
+The build now has one compiler warning, in generic code:
+`net/core/skbuff.c` prints a pointer difference with `%u`, and
+`ptrdiff_t` is `long` on wasm32.
 
 ## fork()
 
