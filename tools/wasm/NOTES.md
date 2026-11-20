@@ -440,6 +440,12 @@ Known gaps are in the FIXME at the top of `usernet.js`: a refused
 connection is a reset after `connect()` succeeded, there is no half-close,
 no IPv6, and nothing can connect from outside.
 
+Programs linked against OpenSSL (5 to 8 MB) did not load: a program is
+read into one contiguous block, and the page allocator's largest block
+was 4 MiB. `ARCH_FORCE_MAX_ORDER` is now 14 (64 MiB, which is also
+`binfmt_wasm`'s limit); whether memory is still unfragmented enough for
+such a block after the system has run for a while has not been tested.
+
 The build now has one compiler warning, in generic code:
 `net/core/skbuff.c` prints a pointer difference with `%u`, and
 `ptrdiff_t` is `long` on wasm32.
