@@ -4,13 +4,18 @@
 //
 //   node tools/wasm/host/node-run.mjs [--kernel build/wasm/vmlinux.wasm]
 //        [--mem 128] [--cmdline "..."] [--timeout seconds]
-//        [--input "text" [--input-after "marker"]]...
+//        [--disk image]... [--input "text" [--input-after "marker"]]...
+//
+// --size COLUMNSxROWS is the terminal size the kernel is told (none
+// otherwise). --disk attaches a file as a virtio disk (/dev/vda, /dev/vdb, ...); the
+// kernel writes to it.
 //
 // --input sends console input (\n is a newline, \xHH the byte HH) once the
 // output contains the --input-after marker, or right away without one.
 // Both can be repeated: the n-th input waits for the n-th marker to show
 // up in what was printed after the previous input was sent. stdin is not
 // forwarded.
+import { statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -28,6 +33,8 @@ const { values: args } = parseArgs({
     mem: { type: "string", default: "128" },
     cmdline: { type: "string", default: "" },
     timeout: { type: "string", default: "0" },
+    disk: { type: "string", multiple: true, default: [] },
+    size: { type: "string" },
     input: { type: "string", multiple: true, default: [] },
     "input-after": { type: "string", multiple: true, default: [] },
   },
@@ -49,22 +56,29 @@ const pendingInputs = args.input.map((text, i) => ({
 }));
 let seen = "";
 
+function createWorker(file) {
+  const worker = new Worker(new URL(file, import.meta.url));
+  const handle = {
+    postMessage: (msg) => worker.postMessage(msg),
+    terminate: () => worker.terminate(),
+    onmessage: null,
+    onerror: null,
+  };
+  worker.on("message", (msg) => handle.onmessage?.(msg));
+  worker.on("error", (err) => handle.onerror?.(err));
+  return handle;
+}
+
 const machine = new Machine({
   module,
   memoryMiB: Number(args.mem),
   cmdline: args.cmdline,
-  createWorker() {
-    const worker = new Worker(new URL("./node-worker.mjs", import.meta.url));
-    const handle = {
-      postMessage: (msg) => worker.postMessage(msg),
-      terminate: () => worker.terminate(),
-      onmessage: null,
-      onerror: null,
-    };
-    worker.on("message", (msg) => handle.onmessage?.(msg));
-    worker.on("error", (err) => handle.onerror?.(err));
-    return handle;
-  },
+  disks: args.disk.map((path) => ({
+    bytes: statSync(path).size,
+    backend: { path },
+  })),
+  createWorker: () => createWorker("./node-worker.mjs"),
+  createDeviceWorker: () => createWorker("./node-device-worker.mjs"),
   onConsole(text) {
     process.stdout.write(text);
     seen += text;
@@ -104,4 +118,5 @@ if (Number(args.timeout) > 0)
     process.exit(124);
   }, Number(args.timeout) * 1000);
 
+if (args.size) machine.resize(...args.size.split("x").map(Number));
 machine.boot();

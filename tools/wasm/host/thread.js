@@ -5,6 +5,7 @@
 // This file implements the import side of arch/wasm/include/asm/host.h.
 
 import { InputQueue } from "./input.js";
+import { virtioImports } from "./virtio.js";
 
 const THREAD_EXIT = Symbol("thread_exit");
 const HALT = Symbol("halt");
@@ -27,7 +28,6 @@ export function runThread(init, post) {
   // Pointers arrive as signed i32.
   const bytes = (ptr, len) =>
     new Uint8Array(memory.buffer, ptr >>> 0, len >>> 0);
-  const decoder = new TextDecoder();
 
   let instance; // the kernel, for this thread
 
@@ -65,12 +65,17 @@ export function runThread(init, post) {
   }
 
   const host = {
+    ...virtioImports(init.devices ?? [], bytes),
+
     console_write(ptr, len) {
-      // TextDecoder refuses views of shared memory, hence the copy. `seq`
-      // is a counter shared by all threads so the machine can restore the
-      // global order of console output that arrives from different workers.
-      const text = decoder.decode(bytes(ptr, len).slice(), { stream: true });
-      post({ type: "console", seq: Atomics.add(seq, 0, 1), text });
+      // `seq` is a counter shared by all threads so the machine can
+      // restore the global order of console output that arrives from
+      // different workers. The bytes are decoded there, as one stream.
+      post({ type: "console", seq: Atomics.add(seq, 0, 1), bytes: bytes(ptr, len).slice() });
+    },
+
+    console_size() {
+      return input.size;
     },
 
     console_read(ptr, len) {

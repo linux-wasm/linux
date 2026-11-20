@@ -11,6 +11,10 @@
 #define WASM_IRQ_TIMER	0
 #define WASM_IRQ_CONSOLE	1	/* part of the host interface, asm/host.h */
 
+/* Device n of the host's virtio devices, see asm/host.h. */
+#define WASM_IRQ_VIRTIO0	2
+#define WASM_VIRTIO_MAX		(NR_IRQS - WASM_IRQ_VIRTIO0)
+
 #include <asm-generic/irq.h>
 
 #endif

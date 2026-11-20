@@ -5,21 +5,41 @@
  * /dev/console to write to.
  *
  * Input: the host raises WASM_IRQ_CONSOLE when it has bytes; the handler
- * fetches them with console_read and feeds the tty.
+ * fetches them with console_read and feeds the tty. The same interrupt
+ * announces a new size of the host's terminal (console_size), which becomes
+ * the tty's window size.
  */
 #include <linux/console.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/string.h>
 #include <linux/tty.h>
 #include <linux/tty_driver.h>
 #include <linux/tty_flip.h>
+#include <linux/workqueue.h>
 #include <asm/host.h>
 #include <asm/irq.h>
 #include "wasm.h"
 
+/*
+ * The host shows the console on a terminal, which wants "\r\n" at the end
+ * of a line. The tty adds the "\r" for user programs (ONLCR); for the
+ * kernel log it is added here, as serial consoles do.
+ */
 static void wasm_console_write(struct console *con, const char *s, unsigned int n)
 {
-	wasm_host_console_write(s, n);
+	while (n) {
+		const char *nl = memchr(s, '\n', n);
+		unsigned int len = nl ? nl - s : n;
+
+		if (len)
+			wasm_host_console_write(s, len);
+		if (!nl)
+			break;
+		wasm_host_console_write("\r\n", 2);
+		s += len + 1;
+		n -= len + 1;
+	}
 }
 
 #ifdef CONFIG_TTY
@@ -27,6 +47,35 @@ static void wasm_console_write(struct console *con, const char *s, unsigned int 
 static struct tty_driver *wasm_tty_driver;
 static struct tty_port wasm_tty_port;
 static const struct tty_port_operations wasm_tty_port_ops;
+
+/* The host's terminal size as a winsize; false if the host has none. */
+static bool wasm_tty_host_size(struct winsize *ws)
+{
+	u32 size = wasm_host_console_size();
+
+	*ws = (struct winsize){ .ws_row = size >> 16, .ws_col = size & 0xffff };
+	return ws->ws_row && ws->ws_col;
+}
+
+/* tty_do_resize() sleeps, so the interrupt handler leaves it to this. */
+static void wasm_tty_resize(struct work_struct *work)
+{
+	struct tty_struct *tty = tty_port_tty_get(&wasm_tty_port);
+	struct winsize ws;
+
+	if (!tty)
+		return;
+	if (wasm_tty_host_size(&ws))
+		tty_do_resize(tty, &ws);
+	tty_kref_put(tty);
+}
+static DECLARE_WORK(wasm_tty_resize_work, wasm_tty_resize);
+
+static int wasm_tty_install(struct tty_driver *driver, struct tty_struct *tty)
+{
+	wasm_tty_host_size(&tty->winsize);
+	return tty_port_install(&wasm_tty_port, driver, tty);
+}
 
 static int wasm_tty_open(struct tty_struct *tty, struct file *filp)
 {
@@ -55,6 +104,7 @@ static unsigned int wasm_tty_write_room(struct tty_struct *tty)
 }
 
 static const struct tty_operations wasm_tty_ops = {
+	.install	= wasm_tty_install,
 	.open		= wasm_tty_open,
 	.close		= wasm_tty_close,
 	.hangup		= wasm_tty_hangup,
@@ -70,6 +120,7 @@ static irqreturn_t wasm_tty_interrupt(int irq, void *dev)
 	while ((n = wasm_host_console_read(buf, sizeof(buf))) > 0)
 		tty_insert_flip_string(&wasm_tty_port, buf, n);
 	tty_flip_buffer_push(&wasm_tty_port);
+	schedule_work(&wasm_tty_resize_work);
 	return IRQ_HANDLED;
 }
 

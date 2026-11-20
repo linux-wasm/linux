@@ -17,6 +17,7 @@ config WASM
 	select ARCH_NO_PREEMPT
 	select ARCH_NO_SWAP
 	select GENERIC_ATOMIC64
+	select GENERIC_CPU_DEVICES
 	select GENERIC_IRQ_SHOW
 	select HAVE_ARCH_COMPILER_H
 	select HAVE_PAGE_SIZE_4KB
@@ -68,6 +69,14 @@ config BINFMT_WASM
 	help
 	  Run position-independent WebAssembly modules as user programs.
 	  The user-space ABI is described in arch/wasm/kernel/binfmt_wasm.c.
+
+config VIRTIO_WASM
+	bool "Virtio devices provided by the host"
+	select VIRTIO
+	help
+	  Devices (disks, ...) that the host offers through the virtio
+	  calls of arch/wasm/include/asm/host.h. Enable the drivers of the
+	  device types separately, e.g. VIRTIO_BLK.
 
 config CMDLINE
 	string "Built-in kernel command line"

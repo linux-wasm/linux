@@ -7,6 +7,9 @@
 // that does not block: in a browser this must be the main thread.
 
 import { InputQueue } from "./input.js";
+import { irqRaiser } from "./irq.js";
+import { blkDevice } from "./virtio-blk.js";
+import { createControl } from "./virtio.js";
 
 const WASM_PAGE = 65536;
 const IRQ_CONSOLE = 1; // WASM_IRQ_CONSOLE in the kernel's asm/irq.h
@@ -21,14 +24,25 @@ export class Machine {
   #nextSeq = 0;
   #pendingConsole = new Map();
   #input = new InputQueue();
+  #decoder = new TextDecoder();
   #userPrograms = new Map(); // task -> program for a thread yet to be spawned
-  #irqInstance = null;
+  #raiseIrq = null;
+  #devices = [];
+  #deviceWorkers = [];
   halted = false;
 
   // opts: { module, memoryMiB, cmdline, createWorker(),
-  //         onConsole(text), onEvent({type, ...}) }
+  //         disks, createDeviceWorker(),
+  //         onConsole(text) or onConsoleBytes(Uint8Array),
+  //         onEvent({type, ...}) }
+  // Console output is UTF-8 as far as the kernel is concerned; onConsole
+  // gets it decoded, onConsoleBytes (for a terminal emulator) as it is.
   // createWorker() returns { postMessage(msg), terminate(),
   //                          onmessage: (data) => void, onerror: (err) => void }
+  // disks: [{ bytes, readOnly, backend }], the virtio block devices
+  // (/dev/vda, ...).
+  // Each is served by a worker from createDeviceWorker() (same shape as
+  // createWorker()), whose glue opens `backend` and calls runDevice().
   constructor(opts) {
     this.#opts = opts;
     const pages = (opts.memoryMiB * 1024 * 1024) / WASM_PAGE;
@@ -38,6 +52,11 @@ export class Machine {
       maximum: pages,
       shared: true,
     });
+    for (const disk of opts.disks ?? [])
+      this.#devices.push({
+        device: { ...blkDevice(disk.bytes, disk.readOnly), control: createControl() },
+        backend: disk.backend,
+      });
   }
 
   get threadCount() {
@@ -45,7 +64,32 @@ export class Machine {
   }
 
   boot() {
+    this.#devices.forEach(({ device, backend }, index) => {
+      const worker = this.#opts.createDeviceWorker();
+      this.#deviceWorkers.push(worker);
+      // Whatever the glue has to say, e.g. { type: "device-error", message }.
+      worker.onmessage = (msg) => this.#event({ ...msg, device: index });
+      worker.onerror = (err) =>
+        this.#event({ type: "worker-error", id: `device ${index}`, message: String(err?.message ?? err) });
+      worker.postMessage({
+        module: this.#opts.module,
+        memory: this.#memory,
+        index,
+        device,
+        backend,
+      });
+    });
     this.#spawn({ kind: "boot" });
+  }
+
+  // Pull the plug: end all threads without telling the kernel. What it
+  // has not written to a disk is lost.
+  stop() {
+    if (this.halted) return;
+    this.halted = true;
+    for (const worker of this.#workers.values()) worker.terminate();
+    for (const worker of this.#deviceWorkers) worker.terminate();
+    this.#workers.clear();
   }
 
   // Console input (keyboard): a string or bytes. Returns the number of
@@ -58,20 +102,18 @@ export class Machine {
     return written;
   }
 
-  // Raise a kernel interrupt. wasm_raise_irq only touches shared memory, so
-  // it can be called on an instance of the kernel that is otherwise unused;
-  // none of that instance's imports are ever called.
+  // The terminal showing the console has this size now (TIOCGWINSZ,
+  // SIGWINCH in the kernel).
+  resize(columns, rows) {
+    this.#input.setSize(columns, rows);
+    this.raiseIrq(IRQ_CONSOLE);
+  }
+
+  // Raise a kernel interrupt (see irq.js).
   async raiseIrq(irq) {
     if (this.halted) return;
-    this.#irqInstance ??= WebAssembly.instantiate(this.#opts.module, {
-      env: { memory: this.#memory },
-      host: Object.fromEntries(
-        WebAssembly.Module.imports(this.#opts.module)
-          .filter((i) => i.module === "host")
-          .map((i) => [i.name, () => { throw new Error(`host.${i.name} called on the irq instance`); }]),
-      ),
-    });
-    (await this.#irqInstance).exports.wasm_raise_irq(irq);
+    this.#raiseIrq ??= irqRaiser(this.#opts.module, this.#memory);
+    (await this.#raiseIrq)(irq);
   }
 
   #spawn(entry) {
@@ -87,6 +129,7 @@ export class Machine {
       seq: this.#seq,
       input: this.#input.buffer,
       cmdline: this.#opts.cmdline,
+      devices: this.#devices.map((d) => d.device),
       userProgram: this.#userPrograms.get(entry.task),
       entry,
     });
@@ -111,6 +154,7 @@ export class Machine {
         this.#flushConsole();
         this.halted = true;
         for (const worker of this.#workers.values()) worker.terminate();
+        for (const worker of this.#deviceWorkers) worker.terminate();
         this.#workers.clear();
         this.#event({ type: "halt", id, reason: HALT_REASONS[msg.reason] ?? msg.reason });
         break;
@@ -138,17 +182,22 @@ export class Machine {
   // Console messages come from different workers and may overtake each
   // other; `seq` gives their true order.
   #console(msg) {
-    this.#pendingConsole.set(msg.seq, msg.text);
+    this.#pendingConsole.set(msg.seq, msg.bytes);
     while (this.#pendingConsole.has(this.#nextSeq)) {
-      this.#opts.onConsole(this.#pendingConsole.get(this.#nextSeq));
+      this.#emitConsole(this.#pendingConsole.get(this.#nextSeq));
       this.#pendingConsole.delete(this.#nextSeq++);
     }
+  }
+
+  #emitConsole(bytes) {
+    if (this.#opts.onConsoleBytes) this.#opts.onConsoleBytes(bytes);
+    else this.#opts.onConsole(this.#decoder.decode(bytes, { stream: true }));
   }
 
   // Emit whatever is buffered even if an earlier message never arrived.
   #flushConsole() {
     for (const seq of [...this.#pendingConsole.keys()].sort((a, b) => a - b))
-      this.#opts.onConsole(this.#pendingConsole.get(seq));
+      this.#emitConsole(this.#pendingConsole.get(seq));
     this.#pendingConsole.clear();
     this.#nextSeq = Atomics.load(this.#seq, 0);
   }

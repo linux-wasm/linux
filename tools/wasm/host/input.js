@@ -3,16 +3,20 @@
 // import). A single-producer ring buffer in a SharedArrayBuffer, because a
 // kernel thread cannot receive messages while it is blocked or running.
 
+//
+// The same buffer carries the size of the terminal (console_size).
+
 const HEAD = 0; // next byte to read (index into data, modulo capacity)
 const TAIL = 1; // next byte to write
-const HEADER_BYTES = 8;
+const SIZE = 2; // rows << 16 | columns, 0 if unknown
+const HEADER_BYTES = 12;
 
 export class InputQueue {
   // Pass nothing to create a queue, or the `buffer` of an existing one
   // (it survives postMessage) to attach to it.
   constructor(buffer = new SharedArrayBuffer(HEADER_BYTES + 4096)) {
     this.buffer = buffer;
-    this.index = new Int32Array(buffer, 0, 2);
+    this.index = new Int32Array(buffer, 0, 3);
     this.data = new Uint8Array(buffer, HEADER_BYTES);
   }
 
@@ -42,5 +46,13 @@ export class InputQueue {
     }
     Atomics.store(this.index, HEAD, head);
     return count;
+  }
+
+  setSize(columns, rows) {
+    Atomics.store(this.index, SIZE, (rows << 16) | columns);
+  }
+
+  get size() {
+    return Atomics.load(this.index, SIZE);
   }
 }

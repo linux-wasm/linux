@@ -13,6 +13,10 @@
  *     -> i32                  return how many (0 if none). Must not block.
  *                             The host announces new input by raising
  *                             interrupt 1 (wasm_raise_irq).
+ *   console_size() -> i32     Size of the terminal that shows the console:
+ *                             rows << 16 | columns, 0 if unknown. Must
+ *                             not block. The host announces a change by
+ *                             raising interrupt 1 as well.
  *   clock_ns() -> i64         Monotonic clock in nanoseconds.
  *   clock_realtime_ns()       Wall-clock time in nanoseconds since the Unix
  *     -> i64                  epoch. Read once at boot to set the time.
@@ -66,6 +70,30 @@
  *                             passes through it.
  *   user_rethrow()            Throw the exception kept by the last
  *                             user_signal. Does not return.
+ *
+ * Devices are virtio devices (CONFIG_VIRTIO_WASM, kernel/virtio.c). The
+ * host numbers them from 0; device n signals used buffers by raising
+ * interrupt WASM_IRQ_VIRTIO0 + n. Virtqueues are split rings (virtio 1.0,
+ * little endian) in the kernel's memory; addresses in them are addresses
+ * in that memory. The host must offer VIRTIO_F_VERSION_1 and must not
+ * offer VIRTIO_F_ACCESS_PLATFORM.
+ *
+ *   virtio_probe(n, info)     Describe device n in *info (struct
+ *     -> i32                  wasm_virtio_info) and return 0, or return
+ *                             nonzero if there is no device n.
+ *   virtio_config_read(n,     Copy len bytes of the device's configuration
+ *       offset, ptr, len)     space, starting at offset.
+ *   virtio_set_features(n,    The feature bits the driver accepted.
+ *       lo, hi)
+ *   virtio_set_status(n,      The device status byte. 0 resets the device:
+ *       status)               when the call returns, the host has
+ *                             forgotten the queues and no longer touches
+ *                             any buffer.
+ *   virtio_queue(n, q, num,   Queue q of device n has num entries and its
+ *       desc, avail, used)    three parts at these addresses; num 0 means
+ *                             the queue is gone.
+ *   virtio_notify(n, q)       Buffers were added to queue q. Must not
+ *                             block.
  *
  * Exports, called by the host:
  *
@@ -127,6 +155,9 @@ int wasm_host_user_exec(const void *image, size_t len,
 __wasm_host(console_read)
 int wasm_host_console_read(char *buf, size_t len);
 
+__wasm_host(console_size)
+u32 wasm_host_console_size(void);
+
 enum wasm_user_entry {
 	WASM_USER_START = 0,
 	WASM_USER_CLONE = 1,
@@ -149,6 +180,34 @@ enum wasm_signal {
 
 __wasm_host(user_signal)
 int wasm_host_user_signal(unsigned long handler, int sig, void *info, void *uc);
+
+/* Filled in by virtio_probe. All fields little endian (as wasm is). */
+struct wasm_virtio_info {
+	u32 device_id;		/* VIRTIO_ID_* */
+	u32 vendor_id;
+	u32 features_lo;	/* feature bits 0-31 */
+	u32 features_hi;	/* feature bits 32-63 */
+	u32 config_len;		/* size of the configuration space */
+};
+
+__wasm_host(virtio_probe)
+int wasm_host_virtio_probe(u32 index, struct wasm_virtio_info *info);
+
+__wasm_host(virtio_config_read)
+void wasm_host_virtio_config_read(u32 index, u32 offset, void *buf, u32 len);
+
+__wasm_host(virtio_set_features)
+void wasm_host_virtio_set_features(u32 index, u32 lo, u32 hi);
+
+__wasm_host(virtio_set_status)
+void wasm_host_virtio_set_status(u32 index, u32 status);
+
+__wasm_host(virtio_queue)
+void wasm_host_virtio_queue(u32 index, u32 queue, u32 num, u32 desc,
+			    u32 avail, u32 used);
+
+__wasm_host(virtio_notify)
+void wasm_host_virtio_notify(u32 index, u32 queue);
 
 #endif /* __ASSEMBLY__ */
 #endif
