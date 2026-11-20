@@ -29,7 +29,7 @@ This repository is the kernel tree. The port adds:
 | `tools/wasm/scripts/build-test-init.sh` | Compiles `tools/wasm/tests/init/{init,hello}.c` to wasm user programs |
 | `tools/wasm/scripts/test-boot.sh` | Headless boot test (node), compares against `tools/wasm/tests/boot-expect.txt` |
 | `tools/wasm/scripts/sync-upstream.sh` | Merges (or rebases onto) a newer upstream tag |
-| `tools/wasm/host/` | JavaScript host: `machine.js`, `thread.js`, `input.js` (independent of browser or node) and `node-run.mjs`, `node-worker.mjs` (headless runner). The browser page and dev server are in linux-wasm/distro |
+| `tools/wasm/host/` | JavaScript host: `machine.js`, `thread.js`, `input.js`, `irq.js`, and the virtio devices `virtio.js`, `virtio-blk.js`, `device.js` (independent of browser or node) and `node-run.mjs`, `node-worker.mjs`, `node-device-worker.mjs` (headless runner). The browser page and dev server are in linux-wasm/distro |
 | `.github/workflows/wasm.yml` | CI: build + boot test |
 | `README.md` | Front page; the upstream `README` is untouched |
 | `build/wasm/` | Kernel build output (`vmlinux.wasm`, `vmlinux.map`, `.config`); ignored by git via the `.gitignore` kbuild writes into it |
@@ -126,6 +126,9 @@ Commit subjects follow Conventional Commits, without co-author trailers.
 - `feat(wasm): support clone and execve from user programs`
 - `feat(wasm): add vfork by lending the child the parent's thread`
 - `feat(wasm): run signal handlers and restart system calls`
+- virtio transport (`kernel/virtio.c`, `CONFIG_VIRTIO_WASM`), the console's
+  window size and "\r\n" in the kernel log, `.notes` markers for sysfs,
+  CPU devices (`GENERIC_CPU_DEVICES`)
 - `feat(wasm/config): enable initramfs, tty and binfmt_wasm in tinyconfig`
 - `fix(wasm): let the kernel know the machine can power off`
 
@@ -177,6 +180,18 @@ Observed, not assumed:
 - Console input: bytes typed in the page (or passed to `node-run.mjs
   --input`) reach a `read()` on `/dev/console`, with tty echo and
   backspace editing.
+- Disks: virtio block devices served by the host (`node-run.mjs --disk`,
+  a file each). Used from linux-wasm/distro with `BLOCK`, `VIRTIO_BLK`,
+  erofs, ext4 (with journal) and overlayfs: a read-only erofs root with
+  an ext4 layer on top, changes found again at the next boot; in Chromium
+  with the ext4 disk in the origin private file system, including after
+  the browser was killed without a shutdown.
+- Also enabled and booted from distro, each only as far as noted: sysfs,
+  devtmpfs, `/proc/sys`, Unix98 ptys (`/dev/pts/ptmx` exists; nothing
+  has opened a pty), epoll/eventfd/signalfd/timerfd/inotify (linked, not
+  called), `MULTIUSER` (only root has run anything).
+- Window size: `node-run.mjs --size 100x30`, then `stty size` prints
+  `30 100`; resizing the page's terminal changes what `stty size` prints.
 - The boot test passes under node. Typing with key events, including
   Ctrl-C, was checked in headless Chromium 147 with the distro's page.
 
@@ -208,7 +223,8 @@ Observed, not assumed:
 - The "Memory:" line reports 0K kernel code/data/bss (empty range symbols).
 - Kernel version shows as `7.3.4+` because the tree has commits on top of
   the tag.
-- The initramfs is built into the kernel image; the host cannot supply one.
+- An initramfs can only be built into the kernel image; the host cannot
+  supply one (it can supply disks).
 
 ## What is stubbed (every `FIXME(wasm)` in the tree)
 
@@ -223,6 +239,7 @@ Observed, not assumed:
 | `kernel/irq.c` | timer is only polled in idle, `cpu_relax()` and syscall entry; long-running kernel or user code gets no ticks |
 | `kernel/setup.c` | RAM size fixed at boot, no `memory.grow` |
 | `kernel/sections.c` | text/rodata/init/data/bss ranges are empty; init data is never freed; "Memory:" line shows 0K |
+| `kernel/virtio.c` | no writes to a device's configuration space; no config-change interrupt; the host serves a request before the kernel does anything else (one CPU), there is no asynchronous I/O |
 | `tools/wasm-objcopy.sh` | `.modinfo` stays in the image; `modules.builtin.modinfo` is empty |
 
 Also not marked in code because it is build glue rather than a stub:
@@ -280,7 +297,8 @@ of the adaptation lives in `arch/wasm`:
   `vmlinux.lds.S` and a generated `.vmlinux.export.c` satisfy rules that need
   the files to exist.
 
-Limits: only the tables tinyconfig references are bracketed. Enabling
+Limits: only the tables tinyconfig references are bracketed, plus
+`.notes` (empty) for sysfs. Enabling
 features that add linker tables (e.g. `__start_notes`, per-CPU sections for
 SMP, `__irqchip_of_table`, LSM tables, kallsyms) gives "undefined symbol" at
 link time until they are added to the head/tail files.
@@ -293,10 +311,14 @@ Imports (module `host`): `console_write(ptr, len)`, `clock_ns() -> i64`,
 `clock_realtime_ns() -> i64`,
 `spawn_thread(task, sp)`, `thread_exit()`, `halt(reason)`,
 `get_cmdline(ptr, len) -> len`, `console_read(ptr, len) -> n`,
+`console_size() -> rows << 16 | columns`,
+`virtio_probe`, `virtio_config_read`, `virtio_set_features`,
+`virtio_set_status`, `virtio_queue`, `virtio_notify` (devices, below),
 `user_exec(image, len, memory_base, table_size, sp) -> errno`,
 `user_clone(task)`, `user_run(arg, entry) -> unwound`, `user_unwind()`,
 `user_signal(handler, sig, info, uc) -> how it ended`, `user_rethrow()`;
-plus `env.memory` (shared). Interrupt 1 is console input.
+plus `env.memory` (shared). Interrupt 1 is console input and a changed
+terminal size; interrupt 2 + n is virtio device n.
 Exports: `_start()`, `wasm_thread_entry(task, sp)`, `wasm_raise_irq(irq)`,
 `wasm_syscall(nr, a0..a5)`.
 
@@ -315,6 +337,22 @@ JavaScript side (`tools/wasm/host/`), no kernel knowledge beyond the list above:
   thread creation are relayed to a thread that does not block (the browser
   main thread). Console chunks carry a shared sequence number so output
   from different workers is shown in the order the kernel wrote it.
+- Devices are virtio devices with a transport of host calls
+  (`kernel/virtio.c`): the kernel asks the host which devices exist, tells
+  it where each virtqueue is, and kicks it. The queues are ordinary split
+  rings in kernel memory. `device.js` serves them on a host thread of its
+  own per device (it may block in file I/O, which a kernel thread's
+  import must not rely on being able to do in a browser: synchronous file
+  access exists only for the one worker that opened the file).
+  `virtio.js` has the small shared block through which kernel threads and
+  the device thread talk (doorbell, status, queue addresses, reset
+  handshake); `virtio-blk.js` is the block device over a
+  `{ read, write, flush }` disk that the glue supplies (node: a file;
+  distro's page: memory or the origin private file system).
+- Console output reaches the machine as bytes and is decoded there as one
+  UTF-8 stream (`onConsole`), or handed on undecoded for a terminal
+  emulator (`onConsoleBytes`). `machine.resize(columns, rows)` sets the
+  size the kernel reports as the tty's window size.
 - `node-run.mjs` is the headless runner; the page is in distro (`site/`).
 - A thread that traps or returns from its entry point is reported as a
   `[host]` error line; that is always a kernel or host bug.
