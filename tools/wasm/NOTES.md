@@ -8,7 +8,7 @@ another program, wait for it, and read what is typed on the console.
 
 The programs doing this are libc-free tests (`tools/wasm/tests/init/`).
 With musl (linux-wasm/musl) and unpatched BusyBox, linux-wasm/distro boots
-this kernel to an interactive hush shell with Ctrl-C and job control; the
+this kernel to an interactive ash shell with fork(), Ctrl-C and job control; the
 kernel's own tests do not depend on either.
 
 Everything shown in the page's `<pre>` is real output of the kernel or of
@@ -50,6 +50,7 @@ User space lives in other repositories of the linux-wasm organisation
 | llvm binutils | `llvm-19 1:19.1.7-3+b1` |
 | compiler-rt (user space only) | `libclang-rt-19-dev-wasm32`, same LLVM 19.1.7 |
 | wabt | 1.0.36 |
+| Binaryen (user space only) | 133, upstream release binary, checked by SHA-256 |
 | GNU make | 4.4.1 |
 | node (headless tests, later) | v20.19.2 |
 
@@ -95,7 +96,7 @@ no web page and no web server; it only keeps the host code that both use.
 
 ## Patch series (`wasm-port` on top of `v7.3.4`)
 
-Generic code, one commit each (4 files, additions only):
+Generic code, one commit each (6 files):
 
 1. `build(kbuild): add clang target triple for ARCH=wasm` — `scripts/Makefile.clang`.
    Kbuild errors out for an arch without a `--target=` entry.
@@ -125,6 +126,7 @@ Commit subjects follow Conventional Commits, without co-author trailers.
 - `feat(wasm): add console input`
 - `feat(wasm): support clone and execve from user programs`
 - `feat(wasm): add vfork by lending the child the parent's thread`
+- `feat(wasm): add fork()` (`mm/fork.c`, `wasm_fork()` in `kernel/process.c`)
 - `feat(wasm): run signal handlers and restart system calls`
 - virtio transport (`kernel/virtio.c`, `CONFIG_VIRTIO_WASM`), the console's
   window size and "\r\n" in the kernel log, `.notes` markers for sysfs,
@@ -234,7 +236,8 @@ Observed, not assumed:
 | `asm/ptrace.h` | `user_mode()` is always 0 |
 | `kernel/signal.c` | signals are only delivered when a system call returns; no alternate signal stack (`SA_ONSTACK` is ignored); `rt_sigreturn` is `-ENOSYS` because handlers return by returning; signals for a vfork child wait until it has left its parent's thread |
 | `kernel/binfmt_wasm.c` | fixed 256 KiB user stack without a guard; no `brk` |
-| `kernel/process.c` | `fork()` is impossible: `clone` needs `CLONE_VM`, a stack and an entry function. No ptrace (`-EIO`), no stack traces |
+| `kernel/process.c` | `clone` without `CLONE_VM` is `-EINVAL` (fork is `wasm_fork()`, not a system call); with it, it needs a stack and an entry function. `fork()` in a signal handler or in a vfork child fails. No ptrace (`-EIO`), no stack traces |
+| `mm/fork.c` | processes related by fork exchange the contents of the memory they have in common at every switch between them; `access_process_vm()` on a process that is not running sees the resident's contents; such memory cannot be partially unmapped; one CPU only |
 | `kernel/vfork.c` | one level only (a vfork child cannot vfork); a loaded program image is leaked if the task dies before running it |
 | `kernel/irq.c` | timer is only polled in idle, `cpu_relax()` and syscall entry; long-running kernel or user code gets no ticks |
 | `kernel/setup.c` | RAM size fixed at boot, no `memory.grow` |
@@ -379,7 +382,9 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   `__clone_entry(stack)`, where `stack` is clone's stack argument.
   `CLONE_VM` and a stack are mandatory. This is the shape of musl's
   `__clone(fn, stack, ...)` and enough for `posix_spawn` and threads.
-- `fork()` cannot exist. `vfork()` does, as the system call `wasm_vfork`
+- `fork()` exists for programs that were run through Binaryen's Asyncify
+  pass and import `linux.fork(buffer, size)`; see "fork()" below.
+  `vfork()` is the system call `wasm_vfork`
   (244): it returns 0 and the calling thread continues as the child, on
   the parent's call stack. The child's successful `execve()` or its
   `exit()` returns the child's pid, and the thread is the parent again.
@@ -398,6 +403,56 @@ joelseverin's kernels, so their musl ports do not apply unchanged.
   function has the address of `SIG_DFL` (0) or `SIG_IGN` (1).
 - `tools/wasm/scripts/build-test-init.sh` has the exact compiler and linker
   flags.
+
+## fork()
+
+Two things stand in the way of fork on this machine, and each has its own
+answer.
+
+**The call stack.** The child must continue inside the parent's wasm call
+stack, which is the engine's and cannot be copied. So the program copies
+it: user programs are post-processed with Binaryen's Asyncify
+(`wasm-opt --asyncify --pass-arg=asyncify-imports@linux.fork`, done by
+distro's `wasm-cc`), which makes every function from which the import
+`linux.fork` can be reached able to save its locals and return ("unwind")
+and to be re-entered and restore them ("rewind"). libc's `_Fork()` calls
+`linux.fork(buffer, size)`; the host (`thread.js`) unwinds the program
+into the buffer down to `user_run`, calls the kernel's export
+`wasm_fork()`, and rewinds the parent. The child's host thread
+instantiates the program again and rewinds it from the same buffer, which
+it has because it has a copy of the memory. Cost: programs grow (BusyBox
+by about 40%) and functions that make indirect calls check a flag after
+each call.
+
+**The memory.** The child needs a copy of the parent's memory at the same
+addresses, with no MMU. Only one task runs at a time, so the two never
+look at an address at the same moment: they share the nommu regions
+(generic commit 5 below gives the child the parent's VMAs) and
+`arch/wasm/mm/fork.c` keeps one copy of the contents per process,
+exchanging region and copy in `switch_mm()`. An `exec` or exit ends the
+sharing. Cost: a fork copies the process's private memory, and so does
+every switch between two processes that still share it.
+
+Generic commit 5: `feat(mm/nommu): let an architecture support fork()` —
+`mm/nommu.c`, `mm/Kconfig`: `ARCH_HAS_NOMMU_FORK`, under which `dup_mmap()`
+copies the VMAs (sharing regions) and calls `arch_nommu_dup_mmap()`,
+`delete_vma()` calls `arch_nommu_delete_vma()`, and a region with more
+than one user is not split or shrunk. It cannot live in the arch: the
+region bookkeeping is private to `mm/nommu.c`.
+
+Observed (linux-wasm/distro, node 22 and Chromium): `/bin/selftest`'s fork
+tests (own memory in parent and child, both alive and talking through
+pipes, fork below several frames, a grandchild, `longjmp` in the child to
+a `setjmp` from before the fork, fork + exec); BusyBox ash as the shell
+(built for an MMU, i.e. with fork): subshells, pipelines of shell code,
+command substitution nested 8 deep, background jobs, job control; 700
+processes in a row without memory going missing. Not tried: fork in a
+process with several threads, programs with big memories (the cost
+above), `MAP_SHARED` memory across a fork.
+
+The host keeps four idle host threads ready (`spareThreads`), because
+starting a Worker took about 100 ms and every new task waited for it; a
+fork now takes about 15 ms in Chromium and 27 ms under node.
 
 ## Known blockers / risks
 

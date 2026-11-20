@@ -76,7 +76,7 @@ User space (musl, BusyBox, initramfs) is deliberately kept out of this tree.
 - Keep changes inside `arch/wasm/` and `tools/wasm/` whenever possible.
 - If generic kernel code must change, put that change in its own commit
   and explain in the message why it cannot be done in the arch. The port
-  currently carries four such commits; the list is in the notes.
+  currently carries five such commits; the list is in the notes.
 - One logical change per commit, in English, with a
   [Conventional Commits](https://www.conventionalcommits.org/) subject:
   `feat(wasm): ...`, `fix(wasm): ...`, `build(tools/wasm): ...`,
