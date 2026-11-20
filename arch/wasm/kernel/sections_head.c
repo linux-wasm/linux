@@ -34,3 +34,6 @@ WASM_SECTION_MARK(__wasm_ext_sched_class,	"__ext_sched_class");
 WASM_SECTION_MARK(__wasm_idle_sched_class,	"__idle_sched_class");
 
 WASM_SECTION_MARK(__start___ex_table,		"__ex_table");
+
+/* ELF notes (/sys/kernel/notes, CONFIG_SYSFS): there are none. */
+WASM_SECTION_MARK(__start_notes,		".notes");

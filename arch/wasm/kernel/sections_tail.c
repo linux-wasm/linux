@@ -7,3 +7,4 @@ WASM_SECTION_MARK(__con_initcall_end,		".con_initcall.init");
 WASM_SECTION_MARK(__setup_end,			".init.setup");
 WASM_SECTION_MARK(__sched_class_lowest,		"__idle_sched_class");
 WASM_SECTION_MARK(__stop___ex_table,		"__ex_table");
+WASM_SECTION_MARK(__stop_notes,			".notes");

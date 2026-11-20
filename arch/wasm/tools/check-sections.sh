@@ -36,7 +36,8 @@ BEGIN {
 	groups[3] = ".con_initcall.init"
 	groups[4] = ".init.setup"
 	groups[5] = "__ex_table"
-	ngroups = 5
+	groups[6] = ".notes"
+	ngroups = 6
 }
 
 # Output segment lines: "<addr> <off> <size> <name>" with the name in the
