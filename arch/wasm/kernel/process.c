@@ -101,7 +101,7 @@ void wasm_thread_start(struct task_struct *task)
 {
 	int (*fn)(void *) = task->thread.fn;
 	void *fn_arg = task->thread.fn_arg;
-	int entry = WASM_USER_CLONE;
+	int entry = task->thread.fork_child ? WASM_USER_FORK : WASM_USER_CLONE;
 
 	schedule_tail(wasm_last_task);
 
@@ -172,10 +172,19 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	 * a stack of its own and the parent's memory (there is no MMU to
 	 * copy an address space anyway).
 	 *
-	 * fork() is impossible. vfork() is provided separately by the
-	 * wasm_vfork system call, which lends the child the parent's thread
-	 * (vfork.c).
+	 * vfork() is provided separately by the wasm_vfork system call,
+	 * which lends the child the parent's thread (vfork.c), and fork()
+	 * by wasm_fork() below, with the help of the host and the program.
+	 * A clone() system call without CLONE_VM cannot work.
 	 */
+	if (current->thread.fork_request) {
+		/* wasm_fork(): the host restores the call stack. */
+		p->thread.user = 1;
+		p->thread.fork_child = 1;
+		wasm_host_user_fork(p);
+		return 0;
+	}
+
 	if (!current->thread.user || !(args->flags & CLONE_VM))
 		return -EINVAL;
 
@@ -195,6 +204,43 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	p->thread.user_sp = args->stack;
 	wasm_host_user_clone(p);
 	return 0;
+}
+
+/*
+ * fork(). Exported to the host, not a system call, because the kernel
+ * cannot do it alone: the child has to continue inside the parent's wasm
+ * call stack, which only the program itself can save and rebuild. A
+ * program that supports it is instrumented for that (Binaryen's Asyncify),
+ * and the host drives it:
+ *
+ *  1. The program calls its import linux.fork(buffer, size). The host
+ *     makes it unwind: every function on the stack saves its locals to
+ *     the buffer and returns, down to the host's user_run().
+ *  2. The host calls wasm_fork(). The child is an ordinary new process
+ *     with a copy of the parent's memory (arch/wasm/mm/fork.c), which
+ *     includes that buffer.
+ *  3. The host has the parent rewind (re-enter the functions, restoring
+ *     their locals) up to the call of linux.fork, which returns the pid.
+ *  4. The child's host thread instantiates the program on the child's
+ *     memory and rewinds it the same way; there linux.fork returns 0.
+ *
+ * Returns the child's pid or a negative errno.
+ */
+long wasm_fork(void)
+{
+	struct kernel_clone_args args = {
+		.exit_signal	= SIGCHLD,
+	};
+	long pid;
+
+	/* A vfork child on its parent's thread has nothing of its own to copy. */
+	if (!current->thread.user || current->thread.vfork_parent)
+		return -EAGAIN;
+
+	current->thread.fork_request = 1;
+	pid = kernel_clone(&args);
+	current->thread.fork_request = 0;
+	return pid;
 }
 
 void flush_thread(void)

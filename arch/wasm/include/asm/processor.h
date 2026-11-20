@@ -36,6 +36,9 @@ struct thread_struct {
 	int vfork_request;			/* parent: clone in progress */
 	long vfork_pid;				/* parent: result for vfork() */
 	int exit_pending, exit_code;		/* child: exit after leaving */
+	/* fork(), see wasm_fork() in arch/wasm/kernel/process.c. */
+	int fork_request;			/* parent: clone in progress */
+	int fork_child;				/* child: not yet started */
 	/*
 	 * A signal handler left by throwing an exception (longjmp), which
 	 * the host is holding; see signal.c.

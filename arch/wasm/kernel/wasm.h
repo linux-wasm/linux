@@ -22,6 +22,8 @@ long wasm_do_syscall(long nr, unsigned long a0, unsigned long a1,
 		     unsigned long a2, unsigned long a3, unsigned long a4,
 		     unsigned long a5);
 
+long wasm_fork(void);
+
 void wasm_console_init(void);
 
 /* process.c */

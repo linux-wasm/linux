@@ -47,13 +47,32 @@
  *                             task (spawn_thread) must get its own
  *                             instance of the calling thread's program:
  *                             same module, memory_base and table_size.
+ *   user_fork(task)           Like user_clone, for the child of a fork():
+ *                             called during wasm_fork(). The thread that
+ *                             will be spawned for task continues the
+ *                             calling thread's program where that called
+ *                             linux.fork, see user_run.
  *   user_run(arg, entry)      Enter the thread's program: call its export
  *     -> i32                  _start(arg) for entry WASM_USER_START, or
  *                             for WASM_USER_CLONE instantiate the program
  *                             announced by user_clone, with arg as
  *                             __stack_pointer, and call its export
- *                             __clone_entry(arg). Returns 0 if that call
- *                             returns, 1 if it was ended by user_unwind.
+ *                             __clone_entry(arg). For WASM_USER_FORK
+ *                             instantiate the program announced by
+ *                             user_fork, with the __stack_pointer the
+ *                             parent had, without applying relocations
+ *                             (the memory is a copy of the parent's), and
+ *                             rewind it to the parent's linux.fork call,
+ *                             which returns 0. Returns 0 if the program's
+ *                             entry function returns, 1 if it was ended
+ *                             by user_unwind.
+ *
+ *                             While the program runs it may call its
+ *                             import linux.fork(buffer, size); what the
+ *                             host does then is described at wasm_fork()
+ *                             in kernel/process.c. Without the Asyncify
+ *                             exports in the program, or inside a signal
+ *                             handler, linux.fork returns -ENOSYS.
  *   user_unwind()             Abandon the running program: unwind the host
  *                             stack up to the user_run call that entered
  *                             it and make that return 1. Does not return.
@@ -103,6 +122,10 @@
  *                             Callable from any thread/instance.
  *   wasm_syscall(nr, a0..a5)  System call entry for the user program of
  *                             the thread this instance belongs to.
+ *   wasm_fork() -> i32        Create a child process of the thread's
+ *                             program: the kernel half of fork(). Call
+ *                             from within user_run, with the program
+ *                             unwound. Returns the pid or a negative errno.
  *
  * The kernel blocks with the wasm threads instructions
  * (memory.atomic.wait32/notify) on its own; timers need no host call.
@@ -161,10 +184,14 @@ u32 wasm_host_console_size(void);
 enum wasm_user_entry {
 	WASM_USER_START = 0,
 	WASM_USER_CLONE = 1,
+	WASM_USER_FORK = 2,
 };
 
 __wasm_host(user_clone)
 void wasm_host_user_clone(struct task_struct *task);
+
+__wasm_host(user_fork)
+void wasm_host_user_fork(struct task_struct *task);
 
 __wasm_host(user_run)
 int wasm_host_user_run(unsigned long arg, int entry);

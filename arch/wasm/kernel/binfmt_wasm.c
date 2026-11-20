@@ -35,6 +35,17 @@
  *    the child finds on that stack (function, argument, TLS) is between
  *    the parent and __clone_entry, i.e. libc's business. It must not
  *    return either.
+ *  - may import linux.fork, type (i32 buffer, i32 size) -> i32, to be able
+ *    to fork(). It returns the child's pid in the parent, 0 in the child
+ *    or -errno. For that the module must have been run through Binaryen's
+ *    Asyncify pass (wasm-opt --asyncify
+ *    --pass-arg=asyncify-imports@linux.fork) and export its asyncify_*
+ *    functions: the call stack is saved to and restored from the buffer,
+ *    which must be large enough for the locals of all functions on it
+ *    (overflow traps). The child runs on a new instance: of the module's
+ *    globals only __stack_pointer has the parent's value, anything else
+ *    (a thread pointer) is for the caller to keep in a local and set
+ *    again. See wasm_fork() in process.c.
  *
  * The kernel reads the whole file, allocates one anonymous mapping holding
  * the stack followed by the module's data, and asks the host to compile and
@@ -53,8 +64,8 @@
  * by returning, or leaves with longjmp(). There is no sigreturn trampoline
  * and the kernel's struct sigaction has no sa_restorer. See signal.c.
  *
- * FIXME(wasm): fork() is impossible (see copy_thread), the stack size is
- * fixed and has no guard, there is no alternate signal stack.
+ * FIXME(wasm): the stack size is fixed and has no guard, there is no
+ * alternate signal stack.
  *
  * The idea of a wasm binfmt comes from tombl/linux and joelseverin/linux;
  * this implementation and its ABI are specific to this port.
