@@ -20,6 +20,8 @@
  *   clock_ns() -> i64         Monotonic clock in nanoseconds.
  *   clock_realtime_ns()       Wall-clock time in nanoseconds since the Unix
  *     -> i64                  epoch. Read once at boot to set the time.
+ *   random(ptr, len)          Fill len bytes with random numbers fit for
+ *                             cryptography. Must not block.
  *   spawn_thread(task, sp)    Start a new host thread on a fresh instance
  *                             of this module sharing the same memory, and
  *                             call the export wasm_thread_entry(task, sp)
@@ -157,6 +159,9 @@ u64 wasm_host_clock_ns(void);
 
 __wasm_host(clock_realtime_ns)
 u64 wasm_host_clock_realtime_ns(void);
+
+__wasm_host(random)
+void wasm_host_random(void *buf, size_t len);
 
 __wasm_host(spawn_thread)
 void wasm_host_spawn_thread(struct task_struct *task, void *sp);

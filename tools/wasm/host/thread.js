@@ -148,6 +148,17 @@ function prepareThread(init, postUnordered) {
       );
     },
 
+    random(ptr, len) {
+      // getRandomValues refuses views of shared memory, and more than
+      // 65536 bytes at a time.
+      const target = bytes(ptr, len);
+      for (let done = 0; done < target.length; done += 65536) {
+        const chunk = new Uint8Array(Math.min(65536, target.length - done));
+        crypto.getRandomValues(chunk);
+        target.set(chunk, done);
+      }
+    },
+
     clock_realtime_ns() {
       return BigInt(Date.now()) * 1000000n;
     },
