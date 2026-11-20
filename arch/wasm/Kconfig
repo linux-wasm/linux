@@ -53,6 +53,15 @@ config NO_IOPORT_MAP
 config LD_IS_WASMLD
 	def_bool y
 
+# Without an MMU every allocation is one contiguous block, and the largest
+# block the page allocator hands out is 2^order pages. A program is read
+# into memory whole to be handed to the host, and its data is one mapping:
+# with the default of 4 MiB, programs linked against OpenSSL do not load.
+# 64 MiB is also binfmt_wasm's limit for a program.
+config ARCH_FORCE_MAX_ORDER
+	int
+	default 14
+
 config NR_CPUS
 	int
 	default 1
