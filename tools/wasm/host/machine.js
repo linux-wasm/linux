@@ -9,6 +9,7 @@
 import { InputQueue } from "./input.js";
 import { irqRaiser } from "./irq.js";
 import { blkDevice } from "./virtio-blk.js";
+import { netDevice } from "./virtio-net.js";
 import { createControl } from "./virtio.js";
 
 const WASM_PAGE = 65536;
@@ -40,6 +41,7 @@ export class Machine {
   // gets it decoded, onConsoleBytes (for a terminal emulator) as it is.
   // createWorker() returns { postMessage(msg), terminate(),
   //                          onmessage: (data) => void, onerror: (err) => void }
+  //         network,
   // disks: [{ bytes, readOnly, backend }], the virtio block devices
   // (/dev/vda, ...).
   // Each is served by a worker from createDeviceWorker() (same shape as
@@ -57,6 +59,16 @@ export class Machine {
       this.#devices.push({
         device: { ...blkDevice(disk.bytes, disk.readOnly), control: createControl() },
         backend: disk.backend,
+      });
+    // network: { proxy, dns }, a network card (eth0) on the user-mode
+    // network of usernet.js; the glue hands these options to runDevice().
+    if (opts.network)
+      this.#devices.push({
+        device: {
+          ...netDevice(Uint8Array.of(0x52, 0x54, 0x00, 0x12, 0x34, 0x56)),
+          control: createControl(),
+        },
+        backend: { proxy: opts.network.proxy, dns: opts.network.dns },
       });
   }
 

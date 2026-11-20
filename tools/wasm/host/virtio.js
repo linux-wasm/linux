@@ -23,6 +23,7 @@
 
 export const IRQ_VIRTIO0 = 2; // WASM_IRQ_VIRTIO0 in the kernel's asm/irq.h
 
+export const VIRTIO_ID_NET = 1;
 export const VIRTIO_ID_BLOCK = 2;
 export const VIRTIO_F_VERSION_1 = 32; // bit number
 export const STATUS_DRIVER_OK = 4;
@@ -116,38 +117,50 @@ export class VirtQueue {
   #lastAvail = 0;
   #usedIdx = 0;
 
-  // Hand every buffer chain the driver has made available to
-  // handle(chain), in order, and mark it used. A chain is an array of
-  // { addr, len, write }; handle returns how many bytes it wrote into the
-  // writable parts. Returns true if the driver wants an interrupt.
-  process(memory, num, desc, avail, used, handle) {
+  // The next buffer chain the driver has made available, or null:
+  // { head, chain }, with chain an array of { addr, len, write }. Every
+  // chain taken must be given back with push().
+  pop(memory, num, desc, avail) {
     const view = new DataView(memory.buffer);
-    let handled = false;
-    while (this.#lastAvail !== view.getUint16(avail + 2, true)) {
-      const head = view.getUint16(avail + 4 + 2 * (this.#lastAvail % num), true);
-      const chain = [];
-      for (let i = head, n = 0; ; n++) {
-        if (i >= num || n >= num) throw new Error("virtqueue: bad descriptor chain");
-        const at = desc + 16 * i;
-        // Addresses are 64 bit, but memory is not.
-        const flags = view.getUint16(at + 12, true);
-        chain.push({
-          addr: view.getUint32(at, true),
-          len: view.getUint32(at + 8, true),
-          write: (flags & DESC_F_WRITE) !== 0,
-        });
-        if (!(flags & DESC_F_NEXT)) break;
-        i = view.getUint16(at + 14, true);
-      }
-      const written = handle(chain);
-      const slot = used + 4 + 8 * (this.#usedIdx % num);
-      view.setUint32(slot, head, true);
-      view.setUint32(slot + 4, written, true);
-      this.#usedIdx = (this.#usedIdx + 1) & 0xffff;
-      view.setUint16(used + 2, this.#usedIdx, true);
-      this.#lastAvail = (this.#lastAvail + 1) & 0xffff;
-      handled = true;
+    if (this.#lastAvail === view.getUint16(avail + 2, true)) return null;
+    const head = view.getUint16(avail + 4 + 2 * (this.#lastAvail % num), true);
+    const chain = [];
+    for (let i = head, n = 0; ; n++) {
+      if (i >= num || n >= num) throw new Error("virtqueue: bad descriptor chain");
+      const at = desc + 16 * i;
+      // Addresses are 64 bit, but memory is not.
+      const flags = view.getUint16(at + 12, true);
+      chain.push({
+        addr: view.getUint32(at, true),
+        len: view.getUint32(at + 8, true),
+        write: (flags & DESC_F_WRITE) !== 0,
+      });
+      if (!(flags & DESC_F_NEXT)) break;
+      i = view.getUint16(at + 14, true);
     }
-    return handled && !(view.getUint16(avail, true) & AVAIL_F_NO_INTERRUPT);
+    this.#lastAvail = (this.#lastAvail + 1) & 0xffff;
+    return { head, chain };
+  }
+
+  // Mark the chain starting at `head` used, with `written` bytes written
+  // into its writable parts. Returns true if the driver wants an interrupt.
+  push(memory, num, avail, used, head, written) {
+    const view = new DataView(memory.buffer);
+    const slot = used + 4 + 8 * (this.#usedIdx % num);
+    view.setUint32(slot, head, true);
+    view.setUint32(slot + 4, written, true);
+    this.#usedIdx = (this.#usedIdx + 1) & 0xffff;
+    view.setUint16(used + 2, this.#usedIdx, true);
+    return !(view.getUint16(avail, true) & AVAIL_F_NO_INTERRUPT);
+  }
+
+  // Hand every available chain to handle(chain), in order, and mark it
+  // used; handle returns how many bytes it wrote. Returns true if the
+  // driver wants an interrupt.
+  process(memory, num, desc, avail, used, handle) {
+    let interrupt = false;
+    for (let next; (next = this.pop(memory, num, desc, avail)); )
+      interrupt = this.push(memory, num, avail, used, next.head, handle(next.chain));
+    return interrupt;
   }
 }

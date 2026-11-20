@@ -4,11 +4,16 @@
 //
 //   node tools/wasm/host/node-run.mjs [--kernel build/wasm/vmlinux.wasm]
 //        [--mem 128] [--cmdline "..."] [--timeout seconds]
-//        [--disk image]... [--input "text" [--input-after "marker"]]...
+//        [--disk image]... [--net proxy|none] [--dns host[:port]]
+//        [--size COLUMNSxROWS] [--input "text" [--input-after "marker"]]...
 //
 // --size COLUMNSxROWS is the terminal size the kernel is told (none
-// otherwise). --disk attaches a file as a virtio disk (/dev/vda, /dev/vdb, ...); the
-// kernel writes to it.
+// otherwise). --disk attaches a file as a virtio disk (/dev/vda,
+// /dev/vdb, ...); the kernel writes to it.
+//
+// --net gives the kernel a network card on a user-mode network (see
+// usernet.js): "--net ws://host:port/" with a Wisp proxy to the outside,
+// "--net none" without one; --dns is the name server behind 10.0.2.3.
 //
 // --input sends console input (\n is a newline, \xHH the byte HH) once the
 // output contains the --input-after marker, or right away without one.
@@ -35,6 +40,8 @@ const { values: args } = parseArgs({
     timeout: { type: "string", default: "0" },
     disk: { type: "string", multiple: true, default: [] },
     size: { type: "string" },
+    net: { type: "string" },
+    dns: { type: "string" },
     input: { type: "string", multiple: true, default: [] },
     "input-after": { type: "string", multiple: true, default: [] },
   },
@@ -77,6 +84,9 @@ const machine = new Machine({
     bytes: statSync(path).size,
     backend: { path },
   })),
+  network: args.net
+    ? { proxy: args.net === "none" ? undefined : args.net, dns: args.dns }
+    : undefined,
   createWorker: () => createWorker("./node-worker.mjs"),
   createDeviceWorker: () => createWorker("./node-device-worker.mjs"),
   onConsole(text) {
@@ -103,6 +113,9 @@ const machine = new Machine({
         break;
       case "user-exec-error":
         note(`thread ${event.id}: cannot load user program: ${event.message}`);
+        break;
+      case "device-note":
+        note(`device ${event.device}: ${event.text}`);
         break;
       case "worker-error":
         note(`worker ${event.id} failed: ${event.message}`);
