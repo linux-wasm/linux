@@ -615,6 +615,9 @@ static int delete_vma_from_mm(struct vm_area_struct *vma)
  */
 static void delete_vma(struct mm_struct *mm, struct vm_area_struct *vma)
 {
+#ifdef CONFIG_ARCH_HAS_NOMMU_FORK
+	arch_nommu_delete_vma(mm, vma);
+#endif
 	vma_close(vma);
 	if (vma->vm_file)
 		fput(vma->vm_file);
@@ -1340,6 +1343,11 @@ static int split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	if (vma->vm_file)
 		return -ENOMEM;
 
+	/* ... which is not so for a region shared with a fork()ed process */
+	if (IS_ENABLED(CONFIG_ARCH_HAS_NOMMU_FORK) &&
+	    vma->vm_region->vm_usage > 1)
+		return -ENOMEM;
+
 	mm = vma->vm_mm;
 	if (mm->map_count >= get_sysctl_max_map_count())
 		return -ENOMEM;
@@ -1416,6 +1424,11 @@ static int vmi_shrink_vma(struct vma_iterator *vmi,
 		      unsigned long from, unsigned long to)
 {
 	struct vm_region *region;
+
+	/* a region shared with a fork()ed process cannot change its size */
+	if (IS_ENABLED(CONFIG_ARCH_HAS_NOMMU_FORK) &&
+	    vma->vm_region->vm_usage > 1)
+		return -ENOMEM;
 
 	/* adjust the VMA's pointers, which may reposition it in the MM's tree
 	 * and list */
@@ -1924,10 +1937,65 @@ static int __meminit init_admin_reserve(void)
 }
 subsys_initcall(init_admin_reserve);
 
+#ifdef CONFIG_ARCH_HAS_NOMMU_FORK
+/*
+ * fork(): give @mm the mappings of @oldmm. There is no way to map other
+ * pages at the same addresses, so the VMAs are copied and share their
+ * regions, as mappings of the same file do. For shared mappings that is
+ * all there is to it; keeping the contents of private ones apart is up to
+ * the architecture.
+ */
+static int nommu_dup_vmas(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	VMA_ITERATOR(old_vmi, oldmm, 0);
+	VMA_ITERATOR(vmi, mm, 0);
+	struct vm_area_struct *vma, *new;
+
+	for_each_vma(old_vmi, vma) {
+		new = vm_area_dup(vma);
+		if (!new)
+			return -ENOMEM;
+
+		vma_iter_init(&vmi, mm, new->vm_start);
+		vma_iter_config(&vmi, new->vm_start, new->vm_end);
+		if (vma_iter_prealloc(&vmi, new)) {
+			vm_area_free(new);
+			return -ENOMEM;
+		}
+
+		down_write(&nommu_region_sem);
+		new->vm_region->vm_usage++;
+		up_write(&nommu_region_sem);
+
+		if (new->vm_file)
+			get_file(new->vm_file);
+		if (new->vm_ops && new->vm_ops->open)
+			new->vm_ops->open(new);
+
+		setup_vma_to_mm(new, mm);
+		mm->map_count++;
+		vma_iter_store_new(&vmi, new);
+	}
+	mm->total_vm = oldmm->total_vm;
+
+	return arch_nommu_dup_mmap(mm, oldmm);
+}
+#else
+static int nommu_dup_vmas(struct mm_struct *mm, struct mm_struct *oldmm)
+{
+	return 0;
+}
+#endif
+
 int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 {
+	int ret;
+
 	mmap_write_lock(oldmm);
 	dup_mm_exe_file(mm, oldmm);
+	mmap_write_lock_nested(mm, SINGLE_DEPTH_NESTING);
+	ret = nommu_dup_vmas(mm, oldmm);
+	mmap_write_unlock(mm);
 	mmap_write_unlock(oldmm);
-	return 0;
+	return ret;
 }

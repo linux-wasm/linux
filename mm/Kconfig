@@ -779,6 +779,17 @@ config HWPOISON_INJECT
 	depends on MEMORY_FAILURE && DEBUG_KERNEL && PROC_FS
 	select PROC_PAGE_MONITOR
 
+config ARCH_HAS_NOMMU_FORK
+	bool
+	depends on !MMU
+	help
+	  Selected by an architecture that can give a child process a copy
+	  of its parent's memory at the same addresses without an MMU, and
+	  so supports fork(). A child created without CLONE_VM then gets the
+	  parent's mappings, sharing their regions, and the architecture is
+	  told (arch_nommu_dup_mmap(), arch_nommu_delete_vma()) so that it
+	  can keep the contents of private regions apart per process.
+
 config NOMMU_INITIAL_TRIM_EXCESS
 	int "Turn on mmap() excess space trimming before booting"
 	depends on !MMU
