@@ -18,6 +18,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         clang-19 \
         cpio \
+        e2fsprogs \
+        erofs-utils \
         flex \
         gcc \
         git \
